@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Agent-facing entry point for the Jellyfin webOS client fork — stack, slices, commands, conventions, domain entities and the context index.
 tags: [entry-point, project, webos, jellyfin, fork, client]
-version: 2.0
+version: 2.1
 doc_language: english
 ---
 
@@ -39,7 +39,7 @@ the picker, discovery, D-pad/Back handling and the bridge.
 | Bridge | `frontend/js/webOS.js` — installs `window.NativeShell` inside the server-served jellyfin-web iframe |
 | Bundled service | webOS Luna JS service `org.jellyfin.webos.service` (`services/service.js`), Node `dgram` UDP discovery |
 | Packaging | `ares-package` via `npm run package` (devDependency `@webosose/ares-cli` ^2.4.0) |
-| Tooling | Node CommonJS scripts under `tools/` (`gen-manifest.js`, `sync-version.js`) |
+| Tooling | Node CommonJS scripts under `tools/` (`gen-repo.js`, `gen-manifest.js`, `sync-version.js`) |
 | Platform bundle | `frontend/webOSTVjs-1.2.11/` (`webOSTV.js`, `webOSTV-dev.js`, Apache-2.0) |
 | Storage | Browser `localStorage` (keys `_deviceId2`, `connected_servers`) |
 | Upstream | Verbatim import of `jellyfin/jellyfin-webos` v1.2.2 |
@@ -59,7 +59,7 @@ generated device id and an auto-connect flag on the TV. Sign-in happens inside j
 | --- | --- | --- | --- | --- |
 | `frontend` | The webOS webview shell: server picker, UDP auto-discovery subscription, iframe handoff to the server-served jellyfin-web, D-pad/Back handling, and the `NativeShell` bridge | webview, iframe, handoff, d-pad, nativeshell, discovery, jellyfin-web, postmessage | `frontend/`, `frontend/js/` | coder, tester, reviewer |
 | `service` | The bundled non-elevated Luna discovery service (`org.jellyfin.webos.service`, UDP 7359 broadcast) | luna, service, discovery, udp, dgram, 7359, subscription | `services/` | coder, reviewer |
-| `packaging` | IPK build, version sync and manifest generation | ares-package, ipk, gen-manifest, sync-version, sha256, version bump | `package.json`, `tools/`, `frontend/appinfo.json` | coder, tester, documenter |
+| `packaging` | IPK build, version sync, manifest generation and HBC repository-document generation | ares-package, ipk, gen-manifest, gen-repo, sync-version, sha256, version bump | `package.json`, `tools/`, `frontend/appinfo.json` | coder, tester, documenter |
 | `compat` | webOS 3.0 / Chromium 38 compatibility work | webos-3, chromium-38, es5, polyfill, legacy, compatibility | `docs/context/webos-3-compatibility.md` | explorer, architect, documenter |
 | `docs` | This documentation corpus | frontmatter, context, protocol, adr | `docs/` | documenter, explorer |
 
@@ -74,6 +74,7 @@ defined in `package.json`; the Docker wrapper (`./dev.sh`) runs the same `ares-*
 | Validate the package | `npm run check` → `ares-package --check` |
 | Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/org.jellyfin.webos_1.2.2_all.ipk` |
 | Generate the HBC manifest | `npm run manifest` → `node tools/gen-manifest.js build/org.jellyfin.webos.manifest.json` |
+| Generate the HBC repository document | `npm run repo` → `node tools/gen-repo.js` → `build/repo.json` (`{"packages":[...]}`, HTTPS URLs + `ipkHash.sha256`) |
 | Sync the version | `npm run version` → `node tools/sync-version.js && git add frontend/appinfo.json` |
 | Remove build output | `npm run clean` → `rm -rf build/` |
 | Install on a TV | `npm run deploy` → `ares-install build/org.jellyfin.webos_${version}_all.ipk` |
@@ -105,6 +106,7 @@ webos-hub/
 ├── services/                      # bundled Luna JS service org.jellyfin.webos.service (UDP discovery)
 │   └── services.json, package.json, service.js
 ├── tools/
+│   ├── gen-repo.js                # writes build/repo.json ({"packages":[...]}, HTTPS URLs + IPK sha256)
 │   ├── gen-manifest.js            # writes a HBC-style manifest with the IPK's sha256
 │   └── sync-version.js            # copies package.json version into frontend/appinfo.json
 ├── .github/workflows/build.yml, .github/workflows/codeql-analysis.yml
@@ -154,7 +156,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 | `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, auto_connect, id, Name, hosturl}`. |
 | `_deviceId2` | The generated device id, built jellyfin-web style from `navigator.userAgent` plus a timestamp. |
 | IPK | The architecture-independent package `build/org.jellyfin.webos_1.2.2_all.ipk`. |
-| HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel. |
+| HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel; this fork's is `https://daver-ui.github.io/webos-hub/repo.json`. |
 | Package manifest | The `manifest` object embedded in a repository package entry: `type`, `ipkUrl`, `ipkHash`, … |
 
 ## Context Index
@@ -166,7 +168,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 - [`context/upstream-provenance.md`](context/upstream-provenance.md) — fork origin, licensing, the
   verbatim-import policy, upstream sync and the divergence log.
 - [`context/hbc-distribution-plan.md`](context/hbc-distribution-plan.md) — approved custom Homebrew
-  Channel repository distribution plan.
+  Channel repository distribution plan; live at `https://daver-ui.github.io/webos-hub/repo.json`.
 - [`context/context-index.md`](context/context-index.md) — the hub for the `docs/context/` folder.
 - [`protocols/release-protocol.md`](protocols/release-protocol.md) — the hand-run release checklist.
 

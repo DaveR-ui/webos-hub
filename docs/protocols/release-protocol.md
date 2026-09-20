@@ -4,7 +4,7 @@ category: protocols
 tags: [release, ipk, hbc, sha256, ares-package, version, jellyfin]
 aliases: [Release Protocol, Publish a Jellyfin webOS client release]
 related: [hbc-distribution-plan, upstream-provenance]
-version: 1.0
+version: 1.1
 status: active
 ---
 
@@ -16,6 +16,9 @@ A release has to produce an IPK whose hash matches the repository document, and 
 differs from what the TV already has. Any skipped step produces a silent failure — a phantom update,
 or a download that only fails at the end. The version must also stay consistent between
 `package.json` and `frontend/appinfo.json`.
+
+**Published repository:** `https://daver-ui.github.io/webos-hub/repo.json` — paste this exact URL as
+the repository source on the TV.
 
 ## Solution
 
@@ -64,27 +67,58 @@ This computes `ipkHash.sha256` from the built IPK. Confirm it matches the file:
 sha256sum build/org.jellyfin.webos_<version>_all.ipk
 ```
 
-The digest must be 64 lowercase hex characters.
+The digest must be 64 lowercase hex characters. `npm run repo` (step 5) recomputes the same digest
+independently, so this standalone manifest is optional if you only need `build/repo.json`.
 
 ### 5. Regenerate the repository document
 
-Update `repo.json` (`{"packages":[...]}`) with:
+```bash
+npm run repo       # node tools/gen-repo.js -> build/repo.json
+```
+
+This automates the step: it reads `frontend/appinfo.json` plus the built IPK, computes
+`ipkHash.sha256`, and writes `build/repo.json` with HTTPS URLs and an embedded `manifest`. `baseUrl`
+defaults to `https://daver-ui.github.io/webos-hub` (override via argv or `$HBC_REPO_BASE_URL`).
+
+Confirm the result contains:
 
 - an embedded `manifest` (not `manifestUrl`);
 - `id: "org.jellyfin.webos"`, `title: "Jellyfin"`;
 - `type: "web"` (there is no `type: "service"`);
 - `rootRequired: false`;
 - `ipkHash: {"sha256": "<64 lowercase hex>"}` from step 4;
-- HTTPS `ipkUrl` and `iconUri` on your own host (the generator leaves `ipkUrl` as a bare filename and
-  `iconUri` on upstream).
+- HTTPS `ipkUrl` and `iconUri` on your own host.
 
-Until `tools/gen-repo.js` exists, this step is manual. See
-[hbc-distribution-plan](../context/hbc-distribution-plan.md).
+**Fallback (manual):** without `npm run repo`, edit `repo.json` by hand — the generator replaces that
+manual edit. See [hbc-distribution-plan](../context/hbc-distribution-plan.md).
 
 ### 6. Publish to the HTTPS static host
 
-Upload the IPK and `repo.json`. **GitHub Pages** is verified to send `access-control-allow-origin: *`;
-GitHub **release assets** do not — that is why the manifest is embedded.
+This fork publishes to **GitHub Pages** of `DaveR-ui/webos-hub`, served from the **`gh-pages` orphan
+branch** (Pages: source = branch `gh-pages`, path `/`; `https_enforced: true`). An orphan branch keeps
+`master`'s `.gitignore` intact — the IPK is gitignored, so it is never committed to `master`. Build the
+branch in a separate worktree containing:
+
+- `repo.json` — the generated `{"packages":[...]}` document;
+- `ipk/org.jellyfin.webos_1.2.2_all.ipk`;
+- `icons/jellyfin.png`;
+- `index.html` — a small landing page stating the source URL;
+- `.nojekyll` — disables Jekyll.
+
+```bash
+npm run package                       # -> build/org.jellyfin.webos_1.2.2_all.ipk
+npm run repo                          # -> build/repo.json (HTTPS URLs + sha256)
+# in a worktree checked out at the gh-pages orphan branch:
+#   copy build/repo.json -> repo.json, build/org.jellyfin.webos_1.2.2_all.ipk -> ipk/, icon -> icons/
+git -C <worktree> add -A
+git -C <worktree> commit -m "Publish org.jellyfin.webos 1.2.2"
+git -C <worktree> push origin gh-pages
+# enable Pages once, if not already:
+gh api -X POST repos/DaveR-ui/webos-hub/pages -f source[branch]=gh-pages -f source[path]=/
+```
+
+**GitHub Pages** is verified to send `access-control-allow-origin: *`; GitHub **release assets** do
+not — that is why the manifest is embedded. Pages caches responses for roughly 10 minutes.
 
 ### 7. Refresh HBC and update
 
@@ -107,10 +141,12 @@ With Docker, prefix each `ares-*` call with `./dev.sh`.
 - [ ] `package.json` `version` differs from the published version, and `npm run version` was run.
 - [ ] `npm run check` reported no problems (only the expected `requiredACG` warning).
 - [ ] `npm run package` succeeded and the IPK exists in `build/`.
-- [ ] `npm run manifest` succeeded and `ipkHash.sha256` equals `sha256sum` of that exact IPK.
+- [ ] `npm run repo` succeeded and `ipkHash.sha256` in `build/repo.json` equals `sha256sum` of that
+      exact IPK.
 - [ ] The repository document embeds the manifest, uses `type: "web"`, sets `rootRequired: false`, and
       carries HTTPS `ipkUrl` / `iconUri`.
-- [ ] `repo.json` and the IPK are reachable over HTTPS.
+- [ ] `repo.json` and the IPK are reachable over HTTPS at the published source URL
+      (`https://daver-ui.github.io/webos-hub/repo.json`).
 - [ ] HBC refreshed, Update installed, and the app launches with the new version.
 - [ ] Any change to an upstream file is recorded in the
       [divergence log](../context/upstream-provenance.md#divergence-log).
@@ -136,9 +172,9 @@ The full short loop:
 npm run version
 npm run check
 npm run package
-npm run manifest
+npm run repo
 sha256sum build/org.jellyfin.webos_<version>_all.ipk
-# 5-6. paste the digest into repo.json, publish, then refresh HBC on the TV
+# 6. publish build/repo.json + the IPK to gh-pages, then refresh HBC on the TV
 ```
 
 ## Common mistakes
@@ -164,12 +200,12 @@ HBC compares version strings by equality. Publishing the same version again leav
 ### repo.json still points at the previous IPK hash
 
 A stale `ipkHash.sha256` fails **after** the whole download, which reads like a network error.
-Recompute the hash every release via `npm run manifest`.
+Recompute the hash every release via `npm run repo`.
 
 ### The manifest was published instead of the repository document
 
 `build/org.jellyfin.webos.manifest.json` is a single manifest, not `{"packages":[...]}`. Wrap it and
-give it real HTTPS `ipkUrl` / `iconUri`.
+give it real HTTPS `ipkUrl` / `iconUri` — `npm run repo` produces the correct document directly.
 
 ### Silencing the requiredACG warning with an empty array
 

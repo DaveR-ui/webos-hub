@@ -66,11 +66,15 @@ After the merge/rebase:
 
 ### Divergence log
 
-Changes to upstream files made by this fork. Currently **none to the code**.
+Changes to upstream files made by this fork.
 
 | # | File(s) | Change | Reason | Status |
 | --- | --- | --- | --- | --- |
-| — | — | No code divergences yet | — | — |
+| 1 | `package.json` | Add `"repo": "node tools/gen-repo.js"` to `scripts` | Generate the custom HBC repository document (`build/repo.json`) reproducibly — see [hbc-distribution-plan](hbc-distribution-plan.md) | Applied |
+
+`tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
+same reason. The `docs/` tree is fork-local and not tracked as a divergence. No upstream **code** files
+have been modified.
 
 Known follow-ups (planned, not yet applied):
 
@@ -78,7 +82,7 @@ Known follow-ups (planned, not yet applied):
 | --- | --- | --- |
 | Add an `Array.prototype.includes` polyfill | webOS 3.0 / Chromium 38 defect | See [webos-3-compatibility](webos-3-compatibility.md). |
 | Resolve `requiredACG` | Packaging/submission warning | Open decision; `[]` is wrong because the app calls Luna. |
-| Re-identify the app id | The fork still uses `org.jellyfin.webos` | Deliberate, not-yet-taken decision. |
+| Re-identify the app id | The fork still uses `org.jellyfin.webos`, which **collides with the official webosbrew repo entry** | Confirmed 2026-09-20: the official webosbrew repo (`repo.webosbrew.org/api/apps.json`) publishes `org.jellyfin.webos` at the **same** version `1.2.2` (upstream build, `sha256 10127a8d…`). Equal version strings mean no phantom update, but HBC cannot distinguish the two builds by id/version alone. Deliberate, not-yet-taken decision; do **not** re-identify silently. See [hbc-distribution-plan](hbc-distribution-plan.md). |
 | Fix upstream picker/LRU bugs | Newly discovered servers may not persist | See [architecture](architecture.md#common-mistakes). |
 | Fix upstream CSS defects | Cosmetic; `main.css:44–45` invalid `flex-wrap`, `:156` stray token | See below. |
 
