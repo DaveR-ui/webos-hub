@@ -1,137 +1,172 @@
 ---
 last_updated: 2026-09-20
 status: active
-description: Agent-facing entry point for WebOS Hub — stack, slices, commands, conventions and the context index.
-tags: [entry-point, project, webos, jellyfin, sunshine]
-version: 1.0
+description: Agent-facing entry point for the Jellyfin webOS client fork — stack, slices, commands, conventions, domain entities and the context index.
+tags: [entry-point, project, webos, jellyfin, fork, client]
+version: 2.0
 doc_language: english
 ---
 
-# WebOS Hub
+# Jellyfin for webOS (personal fork)
 
 ## Overview
 
-WebOS Hub (`com.admin.weboshub`) is a webOS TV app that puts one D-pad home screen over two
-self-hosted services and two already-installed TV apps:
+This repository is a **standalone Jellyfin client for webOS** (`org.jellyfin.webos`, version `1.2.2`).
+It is a **verbatim import of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos)**
+(v1.2.2, upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`), forked for a personal
+**webOS 3.0** TV. See [upstream-provenance](context/upstream-provenance.md) and
+[webos-3-compatibility](context/webos-3-compatibility.md).
 
-- **Jellyfin** (`org.jellyfin.webos`) — Continue Watching, libraries and posters are read from the
-  Jellyfin REST API and rendered by the hub; launching the app opens Jellyfin itself.
-- **Sunshine** (`com.limelight.webos` / Moonlight) — the hub lists Sunshine's apps and launches
-  Moonlight to stream them.
+The app is a **thin native shell / wrapper**, not a media player and not an aggregator:
 
-It is an **aggregator launcher, not a media player**. It does not decode, transcode or proxy
-Jellyfin media: Jellyfin is CORS-permissive, so the webview fetches its API directly. Sunshine has
-no CORS, so those calls go through a bundled, non-elevated Luna service (see
-[architecture](context/architecture.md)).
+1. `frontend/` shows a server picker and auto-discovers Jellyfin servers on the LAN via a bundled
+   Luna service.
+2. On connect it reads `GET {baseurl}/System/Info/Public` and `GET {baseurl}/web/manifest.json`.
+3. It then hands off to the **jellyfin-web UI hosted by the user's Jellyfin server**, loaded in an
+   `<iframe>`, and injects the `NativeShell` bridge (`frontend/js/webOS.js`) into that frame.
+
+All browsing, library and playback UI is therefore server-served jellyfin-web. The wrapper owns only
+the picker, discovery, D-pad/Back handling and the bridge.
+
+> This is a **standalone Jellyfin client**: it federates no other app, service or media server, and
+> none is planned.
 
 ## Technology Stack
 
 | Layer | Choice |
 | --- | --- |
-| Webview app | Vanilla JavaScript, ES5-style IIFEs, no framework, no build step (`index.html`, `js/`, `css/`) |
-| Tooling | Node **ESM** scripts under `tools/*.mjs` |
-| Bundled service | webOS Luna JS service in `services/service.js`, using `webos-service` and Node `http`/`https` |
-| Packaging | `ares-package` (ares-cli 3.2.6), invoked only through `tools/build.mjs` |
-| Platform bundle | `webOSTVjs-1.2.13/` — the production `webOSTV.js` only (the unused dev bundle was removed) |
-| Storage | Browser `localStorage` (key `webosHub.settings.v1`) |
+| Webview app | Vanilla ES5-style JavaScript, no framework, no build step (`frontend/index.html`, `frontend/js/`) |
+| Bridge | `frontend/js/webOS.js` — installs `window.NativeShell` inside the server-served jellyfin-web iframe |
+| Bundled service | webOS Luna JS service `org.jellyfin.webos.service` (`services/service.js`), Node `dgram` UDP discovery |
+| Packaging | `ares-package` via `npm run package` (devDependency `@webosose/ares-cli` ^2.4.0) |
+| Tooling | Node CommonJS scripts under `tools/` (`gen-manifest.js`, `sync-version.js`) |
+| Platform bundle | `frontend/webOSTVjs-1.2.11/` (`webOSTV.js`, `webOSTV-dev.js`, Apache-2.0) |
+| Storage | Browser `localStorage` (keys `_deviceId2`, `connected_servers`) |
+| Upstream | Verbatim import of `jellyfin/jellyfin-webos` v1.2.2 |
+| Distribution | Custom Homebrew Channel (HBC) repository — IPK plus manifest |
+| License | MPL-2.0, with incorporated Apache-2.0 parts |
 
-**Secrets posture:** no credentials are ever committed. Credentials exist only in the TV's
-`localStorage` and, for the smoke test, in environment variables. Source contains default URLs only.
+**Architecture pattern:** thin native shell + bundled non-elevated Luna discovery service. The
+webview owns the picker and the frame handoff; the bundled service owns the only path that needs raw
+sockets (UDP discovery).
 
-**Architecture pattern:** webview SPA + restricted Luna proxy service. The webview owns the UI and
-the Jellyfin calls; the bundled service owns the only path that needs to bypass browser origin rules
-(Sunshine).
+**Secrets posture:** no credentials are ever committed. The wrapper stores only server URLs, a
+generated device id and an auto-connect flag on the TV. Sign-in happens inside jellyfin-web.
 
 ## Slices
 
 | Slice | Description | Keywords | Entry points | Primary agents |
 | --- | --- | --- | --- | --- |
-| `app` | TV webview UI: home rows, D-pad spatial navigation, settings screen | d-pad, focus, jellyfin, sunshine, settings, localStorage, poster, resume | `index.html`, `js/`, `css/` | coder, tester, reviewer |
-| `service` | Bundled non-elevated Luna HTTP proxy with an origin/path allow-list | luna, proxy, allow-list, cors, allowlist, acg, http, rejectUnauthorized | `services/`, `js/sunshine.js` | coder, reviewer |
-| `packaging` | IPK build, HBC repository distribution and release flow | ipk, ares-package, build, sha256, ipkHash, version bump, repo.json, hbc, homebrew | `tools/`, `appinfo.json`, `docs/protocols/release-protocol.md` | coder, tester, documenter |
-| `docs` | This documentation corpus | frontmatter, hub, plan, protocol, context, adr | `docs/`, `docs/context/`, `docs/protocols/` | documenter, explorer |
+| `frontend` | The webOS webview shell: server picker, UDP auto-discovery subscription, iframe handoff to the server-served jellyfin-web, D-pad/Back handling, and the `NativeShell` bridge | webview, iframe, handoff, d-pad, nativeshell, discovery, jellyfin-web, postmessage | `frontend/`, `frontend/js/` | coder, tester, reviewer |
+| `service` | The bundled non-elevated Luna discovery service (`org.jellyfin.webos.service`, UDP 7359 broadcast) | luna, service, discovery, udp, dgram, 7359, subscription | `services/` | coder, reviewer |
+| `packaging` | IPK build, version sync and manifest generation | ares-package, ipk, gen-manifest, sync-version, sha256, version bump | `package.json`, `tools/`, `frontend/appinfo.json` | coder, tester, documenter |
+| `compat` | webOS 3.0 / Chromium 38 compatibility work | webos-3, chromium-38, es5, polyfill, legacy, compatibility | `docs/context/webos-3-compatibility.md` | explorer, architect, documenter |
+| `docs` | This documentation corpus | frontmatter, context, protocol, adr | `docs/` | documenter, explorer |
 
 ## Commands
 
-Working directory is the repository root for every command.
+Working directory is the repository root for every command. Everything runs through npm scripts
+defined in `package.json`; the Docker wrapper (`./dev.sh`) runs the same `ares-*` binaries.
 
-| Task | Command | Output |
-| --- | --- | --- |
-| Build the IPK | `node tools/build.mjs` | `build/com.admin.weboshub_1.0.0_all.ipk` |
-| npm alias for the build | `npm run build` | same as above |
-| Syntax-check JS + tooling | `npm run check` | `syntax OK` |
-| Live end-to-end smoke test | `JELLYFIN_USER=… JELLYFIN_PASS=… SUNSHINE_USER=… SUNSHINE_PASS=… node tools/smoke-test.mjs` | PASS/FAIL summary |
-| npm alias for the smoke test | `npm run smoke` | same as above |
+| Task | Command |
+| --- | --- |
+| Install the webOS toolkit | `npm install` (devDependency `@webosose/ares-cli` ^2.4.0) |
+| Validate the package | `npm run check` → `ares-package --check` |
+| Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/org.jellyfin.webos_1.2.2_all.ipk` |
+| Generate the HBC manifest | `npm run manifest` → `node tools/gen-manifest.js build/org.jellyfin.webos.manifest.json` |
+| Sync the version | `npm run version` → `node tools/sync-version.js && git add frontend/appinfo.json` |
+| Remove build output | `npm run clean` → `rm -rf build/` |
+| Install on a TV | `npm run deploy` → `ares-install build/org.jellyfin.webos_${version}_all.ipk` |
+| Launch on a TV | `npm run launch` → `ares-launch org.jellyfin.webos` |
+| Same, via Docker | `./dev.sh ares-package --no-minify services frontend`, `./dev.sh ares-install …`, `./dev.sh ares-launch org.jellyfin.webos` |
 
-The smoke test's URLs are overridable with `JELLYFIN_URL` and `SUNSHINE_URL`; it exits non-zero on
-any failure.
+**Verified in this environment (2026-09-20):** `ares-package --check` → `no problems detected`;
+`ares-package --no-minify --outdir build/ services frontend` → `Success`, producing a 164262-byte
+`build/org.jellyfin.webos_1.2.2_all.ipk`. The toolchain present was `ares-package` 3.2.6
+(`@webos-tools/cli`) on Node v26.8.2. Upstream CI (`.github/workflows/build.yml`) uses Node 14.x and
+installs `@webosose/ares-cli` globally — note the Node-version difference. There is no automated
+test suite (`npm test` is a stub).
 
 ## Repository Structure
 
 ```
 webos-hub/
-├── appinfo.json          # web app manifest (id, version 1.0.0, type web, requiredACG)
-├── index.html            # single-page app shell; loads webOSTVjs-1.2.13/webOSTV.js
-├── icon.png · largeIcon.png   # app icons referenced by appinfo.json
-├── css/style.css         # dark TV theme and the focus ring
-├── js/                   # webview SPA, no build step
-│   ├── config.js         # settings module (localStorage key webosHub.settings.v1)
-│   ├── focus.js          # D-pad spatial navigation (37/38/39/40, 13, 461/10009)
-│   ├── jellyfin.js       # Jellyfin REST client (direct fetch — CORS-permissive)
-│   ├── sunshine.js       # Sunshine client (through the bundled Luna service)
-│   ├── launcher.js       # applicationmanager `launch` wrapper
-│   └── app.js            # bootstrap, Home ⇄ Settings, rendering
-├── services/             # bundled non-elevated Luna service (com.admin.weboshub.service)
-│   ├── services.json     # service registration
-│   ├── package.json      # main: service.js
-│   └── service.js        # `http` method: allow-listed Node http/https proxy
+├── frontend/                      # the web app (packaged as the app root)
+│   ├── appinfo.json               # id org.jellyfin.webos, v1.2.2, type web, disableBackHistoryAPI true
+│   ├── index.html                 # loads webOSTV.js, webOSTV-dev.js, js/ajax.js, js/storage.js, js/index.js
+│   ├── js/index.js                # server picker, auto-discovery, iframe handoff
+│   ├── js/ajax.js                 # XMLHttpRequest wrapper
+│   ├── js/storage.js              # localStorage wrapper
+│   ├── js/webOS.js                # NativeShell adapter (the jellyfin-web <-> webOS bridge)
+│   ├── css/main.css, css/webOS.css
+│   ├── assets/*.png               # banner-dark, icon-80, icon-130, icon-transparent80/130, splash
+│   ├── submission-icon.png, .project
+│   └── webOSTVjs-1.2.11/          # webOSTV.js + webOSTV-dev.js + LICENSE-2.0.txt
+├── services/                      # bundled Luna JS service org.jellyfin.webos.service (UDP discovery)
+│   └── services.json, package.json, service.js
 ├── tools/
-│   ├── build.mjs         # stages shippable files, then runs ares-package
-│   └── smoke-test.mjs    # live end-to-end smoke test (Node ESM)
-├── webOSTVjs-1.2.13/     # webOS platform JS bundle (required at runtime)
-├── package.json          # npm aliases: build, smoke, check
-├── build/                # output only, git-ignored: the generated .ipk
-└── docs/                 # this documentation corpus
+│   ├── gen-manifest.js            # writes a HBC-style manifest with the IPK's sha256
+│   └── sync-version.js            # copies package.json version into frontend/appinfo.json
+├── .github/workflows/build.yml, .github/workflows/codeql-analysis.yml
+├── dev.sh                         # Docker wrapper around ares-* (ghcr.io/oddstr13/docker-tizen-webos-sdk)
+├── package.json                   # name org.jellyfin.webos, version 1.2.2, license MPL-2.0
+├── package-lock.json, LICENSE (MPL-2.0), CONTRIBUTORS.md, renovate.json, .editorconfig, .gitignore
+└── docs/                          # this corpus
 ```
+
+The pre-fork repository is preserved on branch `backup/pre-jellyfin-fork` (commit `efc4b31`); it is
+not part of the current app. See [upstream-provenance](context/upstream-provenance.md).
 
 ## Key Conventions
 
-- **No secrets in the tree.** Only default service URLs are allowed in source; credentials belong
-  to `localStorage` or the environment.
-- **Docs are lowercase kebab-case** (`hbc-distribution-plan.md`, `context/`, `protocols/`); the one
+- **Verbatim import.** Every upstream file is byte-identical to `jellyfin/jellyfin-webos` at the same
+  relative path. Any change to an upstream file must be recorded in the divergence log of
+  [upstream-provenance](context/upstream-provenance.md) before it lands.
+- **Docs are lowercase kebab-case** (`webos-3-compatibility.md`, `context/`, `protocols/`); the one
   exemption is the root `README.md`.
 - **Two frontmatter contracts, never mixed:** context-doc (`last_updated`, `status`, `description`,
   `tags`, `version`, optional `related`) and note (`id`, `category`, `tags`, `aliases`, `related`,
   `version`, `status`).
 - **`doc_language: english`** — documentation is written in English.
-- **The bundled service never opens a socket to a non-allow-listed origin.** Origin and path are
-  validated before any connection; loopback and link-local hosts are always rejected.
-- **Bump `version` in `appinfo.json` before every release.** HBC compares version strings by
-  equality — a repeated version produces a permanent phantom update. See
+- **No build step for the app.** `frontend/` is packaged as-is; there is no bundler or transpile step.
+  The shipped frontend must stay ES5-friendly for old webOS engines — see
+  [webos-3-compatibility](context/webos-3-compatibility.md).
+- **Never run a bare `ares-package .`** — it would pack `.git/`, `build/` and `docs/` into the IPK.
+  Always use `npm run package`, which names `services frontend` explicitly.
+- **Version is single-sourced.** Bump `version` in `package.json` and run `npm run version` to copy it
+  into `frontend/appinfo.json`. HBC compares version strings by equality — a repeated version
+  produces a permanent phantom update. See
   [hbc-distribution-plan](context/hbc-distribution-plan.md).
-- **Never run a bare `ares-package .`** — it packs `.git/` and `build/` into the IPK. Always use
-  `node tools/build.mjs`, which stages only shippable files.
+- **`frontend/appinfo.json` caveats for webOS 3.0.** `disableBackHistoryAPI` is a post-3.0 property
+  (ignored on 3.0) and `requiredACG` is absent. Both are open compatibility decisions — see
+  [webos-3-compatibility](context/webos-3-compatibility.md).
+- **D-pad handling lives in the wrapper.** Up/Down (38/40) move focus linearly through tabbable
+  elements; Left/Right (37/39) are no-ops; Back (461) calls `webOS.platformBack()`.
 
 ## Domain Entities
 
 | Entity | Definition |
 | --- | --- |
-| Hub app | The webOS web app `com.admin.weboshub` (`appinfo.json`), installed on the TV. |
-| Bundled service | The non-elevated Luna JS service `com.admin.weboshub.service` shipped inside the same IPK. |
-| Settings | The single `localStorage` object `webosHub.settings.v1` holding URLs and credentials on the TV. |
-| Deep-link | A `launch` request carrying `params` into an installed app; only Moonlight honours them. |
-| IPK | The architecture-independent package `com.admin.weboshub_1.0.0_all.ipk` built in `build/`. |
+| Jellyfin webOS client | The webOS web app `org.jellyfin.webos` (`frontend/appinfo.json`), installed on the TV. |
+| Bundled service | The non-elevated Luna JS service `org.jellyfin.webos.service` shipped inside the same IPK. |
+| jellyfin-web | The web UI served by the user's Jellyfin server; runs inside `#contentFrame`. |
+| `NativeShell` / `AppHost` | The bridge object installed into the iframe by `frontend/js/webOS.js`, implementing jellyfin-web's native-shell contract. |
+| `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, auto_connect, id, Name, hosturl}`. |
+| `_deviceId2` | The generated device id, built jellyfin-web style from `navigator.userAgent` plus a timestamp. |
+| IPK | The architecture-independent package `build/org.jellyfin.webos_1.2.2_all.ipk`. |
 | HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel. |
 | Package manifest | The `manifest` object embedded in a repository package entry: `type`, `ipkUrl`, `ipkHash`, … |
 
 ## Context Index
 
-- [`context/architecture.md`](context/architecture.md) — app and service architecture, request flow,
-  proxy security model, settings and ACG.
+- [`context/architecture.md`](context/architecture.md) — webview shell, server picker and discovery,
+  iframe handoff, the `NativeShell` bridge and the bundled Luna service.
+- [`context/webos-3-compatibility.md`](context/webos-3-compatibility.md) — webOS 3.0 / Chromium 38
+  compatibility report: what is safe, the concrete defects and the on-device test plan.
+- [`context/upstream-provenance.md`](context/upstream-provenance.md) — fork origin, licensing, the
+  verbatim-import policy, upstream sync and the divergence log.
 - [`context/hbc-distribution-plan.md`](context/hbc-distribution-plan.md) — approved custom Homebrew
   Channel repository distribution plan.
-- [`context/deep-link-findings.md`](context/deep-link-findings.md) — what deep-linking into Jellyfin
-  and Moonlight actually supports, with evidence.
 - [`context/context-index.md`](context/context-index.md) — the hub for the `docs/context/` folder.
 - [`protocols/release-protocol.md`](protocols/release-protocol.md) — the hand-run release checklist.
 
@@ -139,10 +174,11 @@ webos-hub/
 
 | Symptom | Where |
 | --- | --- |
+| `"The TV cannot discover my Jellyfin server"` | [architecture.md#solution](context/architecture.md#solution) |
 | `"Homebrew Channel shows an Update that never goes away"` | [hbc-distribution-plan.md#common-mistakes](context/hbc-distribution-plan.md#common-mistakes) |
 | `"HBC update fails after downloading the whole package"` | [hbc-distribution-plan.md#common-mistakes](context/hbc-distribution-plan.md#common-mistakes) |
-| `"Changing the Sunshine host requires a full release"` | [hbc-distribution-plan.md#common-mistakes](context/hbc-distribution-plan.md#common-mistakes) |
-| `"Jellyfin opens on its home instead of the selected item"` | [deep-link-findings.md#solution](context/deep-link-findings.md#solution) |
-| `"ares-package packs .git into the IPK"` | [release-protocol.md#common-mistakes](protocols/release-protocol.md#common-mistakes) |
-| `"Sunshine row is empty / bundled service required"` | [architecture.md#common-mistakes](context/architecture.md#common-mistakes) |
-| `"Moonlight opens on its host picker instead of the selected app"` | [deep-link-findings.md#common-mistakes](context/deep-link-findings.md#common-mistakes) |
+| `"App misbehaves on webOS 3.0 / old Chromium"` | [webos-3-compatibility.md](context/webos-3-compatibility.md) |
+| `"Is a compatibility fix a divergence from upstream?"` | [upstream-provenance.md#divergence-log](context/upstream-provenance.md#divergence-log) |
+| `"appinfo.json version is out of sync with package.json"` | [release-protocol.md](protocols/release-protocol.md) |
+| `"`ares-package` packs .git into the IPK"` | [release-protocol.md#common-mistakes](protocols/release-protocol.md#common-mistakes) |
+| `"A newly discovered server is not saved"` | [architecture.md#common-mistakes](context/architecture.md#common-mistakes) |

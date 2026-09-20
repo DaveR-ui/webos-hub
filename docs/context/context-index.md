@@ -1,10 +1,10 @@
 ---
 last_updated: 2026-09-20
 status: active
-description: Hub for the docs/context folder — what belongs here, every file it holds, and what lives elsewhere.
+description: Hub for the docs/context folder of the Jellyfin webOS client fork — what belongs here, every file it holds, and what lives elsewhere.
 tags: [hub, context, index]
-version: 1.0
-related: [architecture, hbc-distribution-plan, deep-link-findings]
+version: 1.1
+related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
 # Context Index
@@ -23,17 +23,20 @@ touches source.
 ### What belongs here
 
 - Architecture and design that outlives a single change.
-- Approved plans and investigations (`hbc-distribution-plan`, `deep-link-findings`).
+- Approved plans and investigations (`hbc-distribution-plan`, `webos-3-compatibility`,
+  `upstream-provenance`).
 - The folder hub and the compatibility pointer for this directory.
 
 ### Contents
 
-- [architecture.md](architecture.md) — webview SPA plus bundled Luna service, request flow, proxy
-  security model, settings and ACG.
+- [architecture.md](architecture.md) — webview shell, server picker and LAN discovery, iframe handoff,
+  the `NativeShell` bridge and the bundled Luna service.
+- [webos-3-compatibility.md](webos-3-compatibility.md) — webOS 3.0 / Chromium 38 compatibility report:
+  what is safe, the concrete defects and the on-device test plan.
+- [upstream-provenance.md](upstream-provenance.md) — fork origin, licensing, the verbatim-import
+  policy, upstream sync and the divergence log.
 - [hbc-distribution-plan.md](hbc-distribution-plan.md) — approved custom Homebrew Channel repository
   distribution plan.
-- [deep-link-findings.md](deep-link-findings.md) — Jellyfin and Moonlight deep-link behaviour, with
-  evidence.
 - [README.md](README.md) — compatibility pointer; the operating agent system resolves this path as
   the folder index.
 - [context-index.md](context-index.md) — this hub.
