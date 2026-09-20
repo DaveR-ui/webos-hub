@@ -1,0 +1,16 @@
+{
+  "id": "com.admin.weboshub",
+  "version": "1.0.0",
+  "vendor": "admin",
+  "type": "web",
+  "main": "index.html",
+  "title": "WebOS Hub",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#000000",
+  "iconColor": "#7C4DFF",
+  "disableBackHistoryAPI": true,
+  "requiredACG": [
+    "application.launcher"
+  ]
+}

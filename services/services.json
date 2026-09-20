@@ -1,0 +1,9 @@
+{
+  "id": "com.admin.weboshub.service",
+  "description": "WebOS Hub HTTP proxy service (Sunshine has no CORS, so requests must leave the webview)",
+  "services": [
+    {
+      "name": "com.admin.weboshub.service"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# Build output
+build/
+*.ipk
+*.ipk.sha256
+ose/
+ose*
+.package/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Editor / OS junk
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*~
+
+# Local environment (never commit credentials)
+.env
+.env.*
+*.local
+*.log
