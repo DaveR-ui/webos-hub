@@ -1,248 +1,164 @@
+// -*- coding: utf-8 -*-
+
 /*
- * WebOS Hub - bundled webOS JS service.
+ * Backend node.js service for server autodiscovery.
  *
- * SECURITY MODEL - restricted proxy, not an open one.
- *
- * Any app on the TV can call the Luna method `http`, so the service validates
- * every request target against a hard-coded allow-list before issuing it from
- * Node's http/https modules:
- *
- *   - ALLOWED_ORIGINS       only these scheme://host[:port] origins are reachable.
- *   - ALLOWED_PATH_PREFIXES only these path prefixes are reachable.
- *   - loopback / link-local / unspecified hostnames (localhost, 127.*, ::1,
- *     0.0.0.0, 169.254.*) are always rejected, so the TV's own local services
- *     can never be reached through this proxy.
- *   - responses are capped at MAX_BODY_BYTES.
- *
- * TLS validation is relaxed ONLY for allow-listed `https:` origins (Sunshine
- * uses a self-signed certificate). There is deliberately NO caller-controlled
- * `insecure` flag, so no caller can disable certificate validation for an
- * arbitrary host.
- *
- * To point the app at a different Sunshine host, edit ALLOWED_ORIGINS below and
- * rebuild.
- *
- * Luna call (from the webview):
- *   webOS.service.request('luna://com.admin.weboshub.service', {
- *     method: 'http',
- *     parameters: { url, method, headers, body },
- *     onSuccess, onFailure
- *   })
- * Response payload: { returnValue, status, headers, body }
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
-/* eslint-disable no-var */
+
 var pkgInfo = require('./package.json');
 var Service = require('webos-service');
-var http = require('http');
-var https = require('https');
-var urlParse = require('url').parse;
 
+// Register com.yourdomain.@DIR@.service, on both buses
 var service = new Service(pkgInfo.name);
 
-var DEFAULT_TIMEOUT_MS = 15000;
-var MAX_BODY_BYTES = 5 * 1024 * 1024;
+var dgram = require('dgram');
+var client4 = dgram.createSocket("udp4");
 
-/* The only origin this proxy may reach (the Sunshine host). Edit + rebuild to
- * target a different host. */
-var ALLOWED_ORIGINS = ['https://192.168.0.205:47990'];
-/* The only path prefixes this proxy may reach. */
-var ALLOWED_PATH_PREFIXES = ['/api/'];
+// var client6;
+// try {
+// 	client6 = dgram.createSocket("udp6");
+// } catch (err) {
+// 	console.log(err);
+// 	client6 = false;
+// }
 
-/* Default ports for origin comparison. */
-function normalizedPort(protocol, port) {
-	if (port) {
-		return String(port);
+const JELLYFIN_DISCOVERY_PORT = 7359;
+const JELLYFIN_DISCOVERY_MESSAGE = "who is JellyfinServer?";
+
+const SCAN_INTERVAL = 15 * 1000;
+const SCAN_ON_START = true;
+
+var scanresult = {};
+
+function sendScanResults(server_id) {
+	console.log("Sending responses, subscription count=" + Object.keys(subscriptions).length);
+	for (var i in subscriptions) {
+		if (subscriptions.hasOwnProperty(i)) {
+			var s = subscriptions[i];
+			if (server_id) {
+				var res = {};
+				res[server_id] = scanresult[server_id];
+				s.respond({
+					results: res
+				});
+			} else {
+			s.respond({
+				results: scanresult,
+			});
+			}
+		}
 	}
-	if (protocol === 'https:') {
-		return '443';
-	}
-	if (protocol === 'http:') {
-		return '80';
-	}
-	return '';
 }
 
-/* Normalizes scheme://host[:port], filling in the protocol default port. */
-function normalizeOrigin(protocol, hostname, port) {
-	var proto = String(protocol || '').toLowerCase();
-	var host = String(hostname || '').toLowerCase();
-	var p = normalizedPort(proto, port);
-	return proto + '//' + host + (p ? ':' + p : '');
+function handleDiscoveryResponse(message, remote) {
+	try {
+		var msg = JSON.parse(message.toString('utf-8'));
+
+		if (typeof msg == "object" &&
+			typeof msg.Id == "string" &&
+			typeof msg.Name == "string" &&
+			typeof msg.Address == "string") {
+
+			scanresult[msg.Id] = msg;
+			scanresult[msg.Id].source = {
+				address: remote.address,
+				port: remote.port,
+			};
+
+			sendScanResults(msg.Id);
+		}
+	} catch (err) {
+		console.log(err);
+	}
 }
 
-var ALLOWED_ORIGINS_NORMALIZED = ALLOWED_ORIGINS.map(function (origin) {
-	var p = urlParse(origin);
-	if (!p || !p.protocol || !p.hostname) {
-		return '';
+function sendJellyfinDiscovery() {
+	var msg = new Buffer(JELLYFIN_DISCOVERY_MESSAGE);
+	client4.send(msg, 0, msg.length, 7359, "255.255.255.255");
+
+	// if (client6) {
+	// 	client6.send(msg, 0, msg.length, 7359, "ff08::1"); // All organization-local nodes
+	// }
+
+}
+
+function discoverInitial() {
+	if (SCAN_ON_START) {
+		sendJellyfinDiscovery();
 	}
-	return normalizeOrigin(p.protocol, p.hostname, p.port);
+}
+
+client4.on("listening", function () {
+	var address = client4.address();
+	console.log('UDP Client listening on ' + address.address + ":" + address.port);
+	client4.setBroadcast(true)
+	client4.setMulticastTTL(128);
+	//client.addMembership('230.185.192.108');
 });
 
-/* Loopback / link-local / unspecified hosts are never reachable. */
-function isBlockedHostname(hostname) {
-	var host = String(hostname || '').toLowerCase();
-	if (!host) {
-		return true;
-	}
-	/* url.parse() keeps the brackets on IPv6 literals. */
-	if (host === '[::1]' || host === '::1') {
-		return true;
-	}
-	if (host === 'localhost' || host === '0.0.0.0') {
-		return true;
-	}
-	if (host.indexOf('127.') === 0) {
-		return true;
-	}
-	if (host.indexOf('169.254.') === 0) {
-		return true;
-	}
-	return false;
-}
+client4.on("message", handleDiscoveryResponse);
+client4.bind({
+	port: JELLYFIN_DISCOVERY_PORT
+}, discoverInitial);
 
-/*
- * Validates a parsed URL against the allow-list.
- * Returns { allowed: true, origin, path } or { allowed: false, reason }.
- */
-function validateTarget(parsed) {
-	var origin = normalizeOrigin(parsed.protocol, parsed.hostname, parsed.port);
-	if (ALLOWED_ORIGINS_NORMALIZED.indexOf(origin) === -1) {
-		return { allowed: false, reason: 'origin not allowed: ' + origin };
-	}
-	if (isBlockedHostname(parsed.hostname)) {
-		return { allowed: false, reason: 'host not allowed (loopback/link-local/unspecified): ' + String(parsed.hostname) };
-	}
-	var targetPath = parsed.path || '/';
-	for (var i = 0; i < ALLOWED_PATH_PREFIXES.length; i++) {
-		if (targetPath.indexOf(ALLOWED_PATH_PREFIXES[i]) === 0) {
-			return { allowed: true, origin: origin, path: targetPath };
-		}
-	}
-	return { allowed: false, reason: 'path not allowed: ' + targetPath };
-}
 
-function respondError(message, errorText, errorCode) {
-	message.respond({
-		returnValue: false,
-		errorText: errorText,
-		errorCode: errorCode
-	});
-}
+// if (client6) {
+// 	client6.on("listening", function () {
+// 		var address = client4.address();
+// 		console.log('UDP Client listening on ' + address.address + ":" + address.port);
+// 		client6.setMulticastTTL(128);
+// 		//client.addMembership('230.185.192.108');
+// 	});
 
-function doRequest(payload, callback) {
-	var target = payload.url;
-	var parsed = urlParse(target);
-	if (!parsed || !parsed.protocol || !parsed.hostname) {
-		callback(new Error('invalid url: ' + target));
+// 	client6.on("message", handleDiscoveryResponse);
+
+// 	try { // client6 bind failing even in a try catch.
+// 		//client6.bind(JELLYFIN_DISCOVERY_PORT, discoverInitial);
+// 	} catch (err) {
+// 		console.log(err);
+// 	}
+// }
+
+
+var interval;
+var subscriptions = {};
+
+function createInterval() {
+	if (interval) {
 		return;
 	}
-
-	var validation = validateTarget(parsed);
-	if (!validation.allowed) {
-		var rejection = new Error(validation.reason);
-		/* errorCode 3 marks an allow-list violation (see the `http` handler). */
-		rejection.errorCode = 3;
-		callback(rejection);
-		return;
-	}
-
-	var isHttps = (parsed.protocol === 'https:');
-	var transport = isHttps ? https : http;
-
-	var options = {
-		protocol: parsed.protocol,
-		hostname: parsed.hostname,
-		port: parsed.port || (isHttps ? 443 : 80),
-		path: parsed.path || '/',
-		method: (payload.method || 'GET').toUpperCase(),
-		headers: payload.headers || {},
-		/*
-		 * TLS validation is relaxed ONLY for allow-listed https: origins
-		 * (Sunshine's self-signed certificate). It is keyed off the validated
-		 * origin - never off caller input - so a caller cannot disable
-		 * certificate validation for an arbitrary host.
-		 */
-		rejectUnauthorized: isHttps ? false : true
-	};
-
-	var settled = false;
-	function finish(err, result) {
-		if (settled) {
-			return;
-		}
-		settled = true;
-		if (err) {
-			callback(err);
-		} else {
-			callback(null, result);
-		}
-	}
-
-	var req = transport.request(options, function (res) {
-		var chunks = [];
-		var bytes = 0;
-		var exceeded = false;
-		res.on('data', function (chunk) {
-			if (exceeded) {
-				return;
-			}
-			bytes += chunk.length;
-			if (bytes > MAX_BODY_BYTES) {
-				exceeded = true;
-				req.destroy(new Error('response body exceeded ' + MAX_BODY_BYTES + ' bytes'));
-				return;
-			}
-			chunks.push(chunk);
-		});
-		res.on('end', function () {
-			finish(null, {
-				status: res.statusCode,
-				headers: res.headers,
-				body: Buffer.concat(chunks).toString('utf8')
-			});
-		});
-		res.on('error', function (err) {
-			finish(err);
-		});
-	});
-
-	req.setTimeout(DEFAULT_TIMEOUT_MS, function () {
-		req.destroy(new Error('request timed out after ' + DEFAULT_TIMEOUT_MS + 'ms'));
-	});
-
-	req.on('error', function (err) {
-		finish(err);
-	});
-
-	if (payload.body) {
-		req.write(payload.body);
-	}
-	req.end();
+	console.log("create new interval");
+	interval = setInterval(function () {
+		sendJellyfinDiscovery();
+	}, SCAN_INTERVAL);
 }
 
-service.register('http', function (message) {
-	var payload = message.payload || {};
+var discover = service.register("discover");
+discover.on("request", function (message) {
+	sendScanResults();
+	var uniqueToken = message.uniqueToken;
+	console.log("discover callback, uniqueToken: " + uniqueToken + ", token: " + message.token);
 
-	if (!payload.url) {
-		respondError(message, "argument 'url' is required", 1);
-		return;
-	}
+	sendJellyfinDiscovery();
 
-	doRequest(payload, function (err, result) {
-		if (err) {
-			if (err.errorCode === 3) {
-				/* Allow-list violation: surface the precise reason. */
-				respondError(message, err.message || String(err), 3);
-				return;
-			}
-			respondError(message, 'request failed: ' + (err.message || String(err)), 2);
-			return;
+	if (message.isSubscription) {
+		subscriptions[uniqueToken] = message;
+		if (!interval) {
+			createInterval();
 		}
-		message.respond({
-			returnValue: true,
-			status: result.status,
-			headers: result.headers,
-			body: result.body
-		});
-	});
+	}
+});
+discover.on("cancel", function (message) {
+	var uniqueToken = message.uniqueToken;
+	console.log("Canceled " + uniqueToken);
+	delete subscriptions[uniqueToken];
+	var keys = Object.keys(subscriptions);
+	if (keys.length === 0) {
+		console.log("no more subscriptions, canceling interval");
+		clearInterval(interval);
+		interval = undefined;
+	}
 });

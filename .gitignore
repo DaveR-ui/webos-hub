@@ -1,28 +1,42 @@
-# Build output
-build/
-*.ipk
-*.ipk.sha256
-ose/
-ose*
-.package/
-
-# Node
-node_modules/
-npm-debug.log*
-yarn-error.log*
-package-lock.json
-
-# Editor / OS junk
-.vscode/
-.idea/
+.metadata
+bin/
+tmp/
+*.tmp
+*.bak
 *.swp
-*.swo
-.DS_Store
+*~.nib
+local.properties
+.settings/
+.loadpath
+.recommenders
+
+# External tool builders
+.externalToolBuilders/
+
+# Locally stored "Eclipse launch configurations"
+*.launch
+
+OutputIPK/
 Thumbs.db
-*~
+*.ipk
+
+# Artifacts from setting Docker WORKDIR the same as HOME
+.ssh/
+.webos/
+.bash_history
+
+# NodeJS
+node_modules/
+build/
+yarn.lock
 
 # Local environment (never commit credentials)
 .env
 .env.*
 *.local
 *.log
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store

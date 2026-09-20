@@ -1,9 +1,9 @@
 {
-  "id": "com.admin.weboshub.service",
-  "description": "WebOS Hub HTTP proxy service (Sunshine has no CORS, so requests must leave the webview)",
+  "id": "org.jellyfin.webos.service",
+  "description": "Jellyfin Discovery Service",
   "services": [
     {
-      "name": "com.admin.weboshub.service"
+      "name": "org.jellyfin.webos.service"
     }
   ]
 }

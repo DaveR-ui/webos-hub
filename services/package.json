@@ -1,11 +1,5 @@
 {
-  "name": "com.admin.weboshub.service",
-  "version": "1.0.0",
-  "description": "WebOS Hub HTTP proxy service",
-  "main": "service.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "admin",
-  "license": "BSD"
+  "name": "org.jellyfin.webos.service",
+  "description": "Jellyfin Discovery Service",
+  "main": "service.js"
 }
