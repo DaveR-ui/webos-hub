@@ -1,0 +1,24 @@
+{
+  "packages": [
+    {
+      "id": "org.jellyfin.webos",
+      "title": "Jellyfin",
+      "iconUri": "https://daver-ui.github.io/webos-hub/icons/jellyfin.png",
+      "rootRequired": false,
+      "manifest": {
+        "id": "org.jellyfin.webos",
+        "version": "1.2.2",
+        "type": "web",
+        "title": "Jellyfin",
+        "appDescription": "A webOS client to connect to a Jellyfin Server instance and stream media.",
+        "iconUri": "https://daver-ui.github.io/webos-hub/icons/jellyfin.png",
+        "sourceUrl": "https://github.com/DaveR-ui/webos-hub",
+        "rootRequired": false,
+        "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/org.jellyfin.webos_1.2.2_all.ipk",
+        "ipkHash": {
+          "sha256": "ca19a18e73ac88db69a0cec4bcb26492dad5f3327c9281b2935fec1d97176076"
+        }
+      }
+    }
+  ]
+}
