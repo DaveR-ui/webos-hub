@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.0
+version: 1.1
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -35,13 +35,15 @@ Jellyfin *server* is GPL-2.0, but the webOS *client* is not.
   `services/service.js`.
 - `frontend/js/ajax.js` and `frontend/js/storage.js` additionally carry a
   "Copyright 2019 Simon J. Hogan — Apache-2.0" notice.
-- Images come from `jellyfin-ux` under the same licence.
+- Upstream images came from `jellyfin-ux` under the same licence; the fork replaced them with a
+  generated monogram mark (see the [divergence log](#divergence-log)).
 - `LICENSE` and `CONTRIBUTORS.md` are kept **verbatim**.
 - **The client is MPL-2.0, not GPL.** The Jellyfin **server** is GPL-2.0; the webOS **client** is not.
 
 ### Verbatim-import policy
 
-- Every upstream file (except `.git/`) is **byte-identical** at the **same relative path**.
+- Upstream files were imported **byte-identical** at the **same relative path**; the rebrand (version
+  `1.3.0`) is the first set of intentional changes to them — see the [divergence log](#divergence-log).
 - The only merged file is `.gitignore`: the previous repository's credential-safety patterns
   (`.env`, `.env.*`, `*.local`, `*.log`, editor junk) were added to upstream's `.gitignore`.
 - Any change to an upstream file must be recorded in the [divergence log](#divergence-log) — ideally
@@ -71,10 +73,21 @@ Changes to upstream files made by this fork.
 | # | File(s) | Change | Reason | Status |
 | --- | --- | --- | --- | --- |
 | 1 | `package.json` | Add `"repo": "node tools/gen-repo.js"` to `scripts` | Generate the custom HBC repository document (`build/repo.json`) reproducibly — see [hbc-distribution-plan](hbc-distribution-plan.md) | Applied |
+| 2 | `frontend/appinfo.json` | Rebrand: `id` → `com.daverui.michelly`, `title` → `MiChelly`, `vendor` → `DaveR-ui`, new `appDescription`, `bgColor`/`iconColor` → `#180C33`, `version` → `1.3.0` | Full re-identification away from the upstream/official id | Applied |
+| 3 | `services/services.json`, `services/package.json` | Service `id`/`name`/`description` → `com.daverui.michelly.service` | Match the new identity | Applied |
+| 4 | `frontend/js/index.js` | Luna URI → `luna://com.daverui.michelly.service`; `appName` → `MiChelly` | Match the renamed service + rebrand | Applied |
+| 5 | `frontend/index.html` | `<title>` → `MiChelly` | Rebrand | Applied |
+| 6 | `frontend/.project` | Project name → `com.daverui.michelly` | Rebrand | Applied |
+| 7 | `package.json`, `package-lock.json` | Name → `com.daverui.michelly`, version `1.3.0`, description, author, `deploy`/`launch`/`manifest` scripts | Rebrand + new IPK name | Applied |
+| 8 | `tools/gen-manifest.js` | `iconUri`/`sourceUrl` → fork host/repo | Stop pointing the standalone manifest at upstream | Applied |
+| 9 | `.github/workflows/build.yml` | Manifest path + artifact name | Rebrand | Applied |
+| 10 | `README.md` | Heading + command references to the new id/IPK | Rebrand | Applied |
+| 11 | `frontend/assets/*.png`, `frontend/submission-icon.png` | Replaced the upstream Jellyfin artwork with a generated "MC" monogram mark | Full rebrand; no Jellyfin artwork reused | Applied |
 
 `tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
-same reason. The `docs/` tree is fork-local and not tracked as a divergence. No upstream **code** files
-have been modified.
+same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is
+fork-local and not tracked as a divergence. The rebrand landed in version `1.3.0` and **did** modify
+upstream files — every such change is listed in the divergence log above.
 
 Known follow-ups (planned, not yet applied):
 
@@ -82,9 +95,11 @@ Known follow-ups (planned, not yet applied):
 | --- | --- | --- |
 | Add an `Array.prototype.includes` polyfill | webOS 3.0 / Chromium 38 defect | See [webos-3-compatibility](webos-3-compatibility.md). |
 | Resolve `requiredACG` | Packaging/submission warning | Open decision; `[]` is wrong because the app calls Luna. |
-| Re-identify the app id | The fork still uses `org.jellyfin.webos`, which **collides with the official webosbrew repo entry** | Confirmed 2026-09-20: the official webosbrew repo (`repo.webosbrew.org/api/apps.json`) publishes `org.jellyfin.webos` at the **same** version `1.2.2` (upstream build, `sha256 10127a8d…`). Equal version strings mean no phantom update, but HBC cannot distinguish the two builds by id/version alone. Deliberate, not-yet-taken decision; do **not** re-identify silently. See [hbc-distribution-plan](hbc-distribution-plan.md). |
 | Fix upstream picker/LRU bugs | Newly discovered servers may not persist | See [architecture](architecture.md#common-mistakes). |
 | Fix upstream CSS defects | Cosmetic; `main.css:44–45` invalid `flex-wrap`, `:156` stray token | See below. |
+
+The rebrand landed in version **`1.3.0`** with the new app id `com.daverui.michelly`, so the app no
+longer collides with the official `org.jellyfin.webos` webosbrew entry — that follow-up is resolved.
 
 The pre-fork repository is preserved on branch **`backup/pre-jellyfin-fork`** (commit `efc4b31`) for
 history; it is not part of the current app.

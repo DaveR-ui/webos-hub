@@ -1,4 +1,4 @@
-# Jellyfin for webOS — personal fork
+# MiChelly — personal webOS client for Jellyfin
 
 This is a **personal fork** of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos),
 imported verbatim at version **1.2.2** (upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`).
@@ -65,11 +65,11 @@ npm run check     # ares-package --check
 npm run package   # ares-package --no-minify --outdir build/ services frontend
 ```
 
-This produces `build/org.jellyfin.webos_<version>_all.ipk`. Generate the Homebrew manifest (which
+This produces `build/com.daverui.michelly_<version>_all.ipk`. Generate the Homebrew manifest (which
 contains the IPK's sha256) with:
 
 ```sh
-npm run manifest  # node tools/gen-manifest.js build/org.jellyfin.webos.manifest.json
+npm run manifest  # node tools/gen-manifest.js build/com.daverui.michelly.manifest.json
 ```
 
 Version handling: bump `version` in `package.json`, then run `npm run version` to copy it into
@@ -117,20 +117,20 @@ account, you need to turn on the `Dev Mode Status` and `Key Server`.
 ./dev.sh ares-device-info -d tv
 
 # This command installs the app. Remember to build it first.
-./dev.sh ares-install -d tv org.jellyfin.webos_*.ipk
+./dev.sh ares-install -d tv com.daverui.michelly_*.ipk
 
 # Launch the app and the web developer console.
-./dev.sh ares-inspect -d tv org.jellyfin.webos
+./dev.sh ares-inspect -d tv com.daverui.michelly
 
 # Or just launch the app.
-./dev.sh ares-launch -d tv org.jellyfin.webos
+./dev.sh ares-launch -d tv com.daverui.michelly
 ```
 
 Without Docker, the npm aliases wrap the same tools:
 
 ```sh
-npm run deploy    # ares-install build/org.jellyfin.webos_<version>_all.ipk
-npm run launch    # ares-launch org.jellyfin.webos
+npm run deploy    # ares-install build/com.daverui.michelly_<version>_all.ipk
+npm run launch    # ares-launch com.daverui.michelly
 ```
 
 ## Attribution

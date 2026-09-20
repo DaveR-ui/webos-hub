@@ -1,5 +1,5 @@
 {
-  "name": "org.jellyfin.webos.service",
-  "description": "Jellyfin Discovery Service",
+  "name": "com.daverui.michelly.service",
+  "description": "MiChelly Discovery Service",
   "main": "service.js"
 }

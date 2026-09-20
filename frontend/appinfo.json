@@ -1,16 +1,16 @@
 {
-    "appDescription": "A webOS client to connect to a Jellyfin Server instance and stream media.",
+    "appDescription": "MiChelly - a webOS client that connects to a Jellyfin server and opens its web UI.",
     "icon": "assets/icon-80.png",
     "main": "index.html",
     "bgImage": "assets/splash.png",
-    "title": "Jellyfin",
+    "title": "MiChelly",
     "type": "web",
-    "version": "1.2.2",
+    "version": "1.3.0",
     "splashBackground": "assets/splash.png",
-    "bgColor": "#000b25",
-    "vendor": "Jellyfin Project",
+    "bgColor": "#180C33",
+    "vendor": "DaveR-ui",
     "largeIcon": "assets/icon-130.png",
-    "iconColor": "#000b25",
-    "id": "org.jellyfin.webos",
+    "iconColor": "#180C33",
+    "id": "com.daverui.michelly",
     "disableBackHistoryAPI": true
 }

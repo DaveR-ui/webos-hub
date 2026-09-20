@@ -12,7 +12,7 @@ var manifest = false;
 var appInfo = {
     deviceId: null,
     deviceName: 'LG Smart TV',
-    appName: 'Jellyfin for WebOS',
+    appName: 'MiChelly',
     appVersion: '0.0.0'
 };
 
@@ -627,7 +627,7 @@ function startDiscovery() {
         return;
     }
     console.log("Starting server autodiscovery...");
-    discover = webOS.service.request("luna://org.jellyfin.webos.service", {
+    discover = webOS.service.request("luna://com.daverui.michelly.service", {
         method: "discover",
         parameters: {
             uniqueToken: 'fooo'

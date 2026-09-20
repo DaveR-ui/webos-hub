@@ -17,7 +17,7 @@ const fs = require('fs');
 
 const DEFAULT_BASE_URL = 'https://daver-ui.github.io/webos-hub';
 const IPK_DIRECTORY = 'ipk';
-const ICON_PATH = 'icons/jellyfin.png';
+const ICON_PATH = 'icons/michelly.png';
 const SOURCE_URL = 'https://github.com/DaveR-ui/webos-hub';
 
 const baseUrl = (process.argv[2] || process.env.HBC_REPO_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');

@@ -4,7 +4,7 @@ category: protocols
 tags: [release, ipk, hbc, sha256, ares-package, version, jellyfin]
 aliases: [Release Protocol, Publish a Jellyfin webOS client release]
 related: [hbc-distribution-plan, upstream-provenance]
-version: 1.1
+version: 1.2
 status: active
 ---
 
@@ -51,20 +51,20 @@ Expect `no problems detected`. A `requiredACG` warning is expected and is an ope
 npm run package    # ares-package --no-minify --outdir build/ services frontend
 ```
 
-Produces `build/org.jellyfin.webos_<version>_all.ipk` (architecture-independent). Never run a bare
+Produces `build/com.daverui.michelly_<version>_all.ipk` (architecture-independent). Never run a bare
 `ares-package .`; that would pack `.git/`, `build/` and `docs/` into the IPK. Naming `services
 frontend` explicitly is what keeps the package clean.
 
 ### 4. Generate the HBC manifest
 
 ```bash
-npm run manifest   # node tools/gen-manifest.js build/org.jellyfin.webos.manifest.json
+npm run manifest   # node tools/gen-manifest.js build/com.daverui.michelly.manifest.json
 ```
 
 This computes `ipkHash.sha256` from the built IPK. Confirm it matches the file:
 
 ```bash
-sha256sum build/org.jellyfin.webos_<version>_all.ipk
+sha256sum build/com.daverui.michelly_<version>_all.ipk
 ```
 
 The digest must be 64 lowercase hex characters. `npm run repo` (step 5) recomputes the same digest
@@ -83,7 +83,7 @@ defaults to `https://daver-ui.github.io/webos-hub` (override via argv or `$HBC_R
 Confirm the result contains:
 
 - an embedded `manifest` (not `manifestUrl`);
-- `id: "org.jellyfin.webos"`, `title: "Jellyfin"`;
+- `id: "com.daverui.michelly"`, `title: "MiChelly"`;
 - `type: "web"` (there is no `type: "service"`);
 - `rootRequired: false`;
 - `ipkHash: {"sha256": "<64 lowercase hex>"}` from step 4;
@@ -100,18 +100,18 @@ branch** (Pages: source = branch `gh-pages`, path `/`; `https_enforced: true`). 
 branch in a separate worktree containing:
 
 - `repo.json` — the generated `{"packages":[...]}` document;
-- `ipk/org.jellyfin.webos_1.2.2_all.ipk`;
-- `icons/jellyfin.png`;
+- `ipk/com.daverui.michelly_1.3.0_all.ipk`;
+- `icons/michelly.png`;
 - `index.html` — a small landing page stating the source URL;
 - `.nojekyll` — disables Jekyll.
 
 ```bash
-npm run package                       # -> build/org.jellyfin.webos_1.2.2_all.ipk
+npm run package                       # -> build/com.daverui.michelly_1.3.0_all.ipk
 npm run repo                          # -> build/repo.json (HTTPS URLs + sha256)
 # in a worktree checked out at the gh-pages orphan branch:
-#   copy build/repo.json -> repo.json, build/org.jellyfin.webos_1.2.2_all.ipk -> ipk/, icon -> icons/
+#   copy build/repo.json -> repo.json, build/com.daverui.michelly_1.3.0_all.ipk -> ipk/, icon -> icons/
 git -C <worktree> add -A
-git -C <worktree> commit -m "Publish org.jellyfin.webos 1.2.2"
+git -C <worktree> commit -m "Publish com.daverui.michelly 1.3.0"
 git -C <worktree> push origin gh-pages
 # enable Pages once, if not already:
 gh api -X POST repos/DaveR-ui/webos-hub/pages -f source[branch]=gh-pages -f source[path]=/
@@ -130,8 +130,8 @@ auto-update; the view is refreshed by hand.
 For development, skip publishing and deploy straight to a registered device:
 
 ```bash
-npm run deploy     # ares-install build/org.jellyfin.webos_<version>_all.ipk
-npm run launch     # ares-launch org.jellyfin.webos
+npm run deploy     # ares-install build/com.daverui.michelly_<version>_all.ipk
+npm run launch     # ares-launch com.daverui.michelly
 ```
 
 With Docker, prefix each `ares-*` call with `./dev.sh`.
@@ -173,7 +173,7 @@ npm run version
 npm run check
 npm run package
 npm run repo
-sha256sum build/org.jellyfin.webos_<version>_all.ipk
+sha256sum build/com.daverui.michelly_<version>_all.ipk
 # 6. publish build/repo.json + the IPK to gh-pages, then refresh HBC on the TV
 ```
 
@@ -184,8 +184,8 @@ sha256sum build/org.jellyfin.webos_<version>_all.ipk
 A bare `ares-package .` packs `.git/`, `build/` and `docs/` into the IPK, bloating it and shipping
 the repository (and its history) to the TV. Always build through `npm run package`, which names
 `services frontend` explicitly. The verified build contains only
-`usr/palm/applications/org.jellyfin.webos/**`, `usr/palm/packages/org.jellyfin.webos/packageinfo.json`
-and `usr/palm/services/org.jellyfin.webos.service/**`.
+`usr/palm/applications/com.daverui.michelly/**`, `usr/palm/packages/com.daverui.michelly/packageinfo.json`
+and `usr/palm/services/com.daverui.michelly.service/**`.
 
 ### appinfo.json version was edited by hand
 
@@ -204,7 +204,7 @@ Recompute the hash every release via `npm run repo`.
 
 ### The manifest was published instead of the repository document
 
-`build/org.jellyfin.webos.manifest.json` is a single manifest, not `{"packages":[...]}`. Wrap it and
+`build/com.daverui.michelly.manifest.json` is a single manifest, not `{"packages":[...]}`. Wrap it and
 give it real HTTPS `ipkUrl` / `iconUri` — `npm run repo` produces the correct document directly.
 
 ### Silencing the requiredACG warning with an empty array

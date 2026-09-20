@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Architecture of the Jellyfin webOS client fork — the webview shell, server picker and LAN discovery, the iframe handoff, the NativeShell bridge and the bundled Luna service.
 tags: [architecture, webview, luna, iframe, handoff, discovery, nativeshell, postmessage, jellyfin]
-version: 1.0
+version: 1.1
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -99,7 +99,7 @@ Declared `supports()` features: `exit`, `externallinkdisplay`, `htmlaudioautopla
 `frontend/js/index.js` starts a subscription on load:
 
 ```js
-webOS.service.request('luna://org.jellyfin.webos.service', {
+webOS.service.request('luna://com.daverui.michelly.service', {
     method: 'discover',
     parameters: { uniqueToken: 'fooo' },
     subscribe: true,
@@ -109,7 +109,7 @@ webOS.service.request('luna://org.jellyfin.webos.service', {
 });
 ```
 
-The bundled **non-elevated** Luna JS service `org.jellyfin.webos.service`
+The bundled **non-elevated** Luna JS service `com.daverui.michelly.service`
 (`services/service.js`, registered by `services/services.json`) implements `discover`:
 
 - Sends the UDP broadcast `who is JellyfinServer?` to port **7359** (`255.255.255.255`), on start, on
@@ -147,7 +147,7 @@ No credentials are stored by the wrapper; sign-in happens inside jellyfin-web.
 
 | Endpoint | Method | Used for |
 | --- | --- | --- |
-| `luna://org.jellyfin.webos.service` | `discover` | LAN server discovery (bundled service). |
+| `luna://com.daverui.michelly.service` | `discover` | LAN server discovery (bundled service). |
 | `luna://com.webos.service.tv.systemproperty` | `getSystemInfo` | Device info via `webOSTV.js` (HDR/Dolby flags, screen size). |
 | `luna://com.webos.service.config` | `getConfigs` | Device info via `webOSTV.js`. |
 | `luna://com.webos.settingsservice` | `getSystemSettings` | Device info via `webOSTV.js`. |

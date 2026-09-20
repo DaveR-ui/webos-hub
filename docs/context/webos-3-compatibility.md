@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the Jellyfin webOS client fork — what is safe, the concrete defects, and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg]
-version: 1.0
+version: 1.1
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -76,7 +76,7 @@ conflict — Back may both navigate history and call `webOS.platformBack()`.
 required to pass submission eligibility checks on some webOS versions, suggesting `"requiredACG": []`
 "if the app calls no Luna APIs".
 
-**This app does call Luna** — its own bundled `org.jellyfin.webos.service` and, through
+**This app does call Luna** — its own bundled `com.daverui.michelly.service` and, through
 `webOSTV.js`, several `com.webos.*` services (see [architecture](architecture.md#luna-endpoints-reached)).
 An empty array would therefore be wrong.
 
