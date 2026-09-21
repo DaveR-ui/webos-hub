@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Agent-facing entry point for MiChelly, the Jellyfin webOS client fork — stack, slices, commands, conventions, domain entities and the context index.
 tags: [entry-point, project, webos, jellyfin, fork, client]
-version: 2.4
+version: 2.5
 doc_language: english
 ---
 
@@ -12,7 +12,7 @@ doc_language: english
 ## Overview
 
 This repository is **MiChelly**, a **standalone Jellyfin client for webOS**
-(`com.daverui.michelly`, version `1.3.1`). It began as a
+(`com.daverui.michelly`, version `1.3.2`). It began as a
 **verbatim import of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos)**
 (v1.2.2, upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`), forked for a personal
 **webOS 3.0** TV, and was rebranded to its own identity in version `1.3.0` (app id, service id,
@@ -74,7 +74,7 @@ defined in `package.json`; the Docker wrapper (`./dev.sh`) runs the same `ares-*
 | --- | --- |
 | Install the webOS toolkit | `npm install` (devDependency `@webosose/ares-cli` ^2.4.0) |
 | Validate the package | `npm run check` → `ares-package --check` |
-| Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/com.daverui.michelly_1.3.1_all.ipk` |
+| Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/com.daverui.michelly_1.3.2_all.ipk` |
 | Generate the HBC manifest | `npm run manifest` → `node tools/gen-manifest.js build/com.daverui.michelly.manifest.json` |
 | Generate the HBC repository document | `npm run repo` → `node tools/gen-repo.js` → `build/repo.json` (`{"packages":[...]}`, HTTPS URLs + `ipkHash.sha256`) |
 | Sync the version | `npm run version` → `node tools/sync-version.js && git add frontend/appinfo.json` |
@@ -84,8 +84,8 @@ defined in `package.json`; the Docker wrapper (`./dev.sh`) runs the same `ares-*
 | Same, via Docker | `./dev.sh ares-package --no-minify services frontend`, `./dev.sh ares-install …`, `./dev.sh ares-launch com.daverui.michelly` |
 
 **Verified in this environment (2026-09-20):** `ares-package --check` → `no problems detected`;
-`ares-package --no-minify --outdir build/ services frontend` → `Success`, producing a 117066-byte
-`build/com.daverui.michelly_1.3.1_all.ipk`. The toolchain present was `ares-package` 3.2.6
+`ares-package --no-minify --outdir build/ services frontend` → `Success`, producing a 117064-byte
+`build/com.daverui.michelly_1.3.2_all.ipk`. The toolchain present was `ares-package` 3.2.6
 (`@webos-tools/cli`) on Node v26.8.2. Upstream CI (`.github/workflows/build.yml`) uses Node 14.x and
 installs `@webosose/ares-cli` globally — note the Node-version difference. There is no automated
 test suite (`npm test` is a stub).
@@ -95,7 +95,7 @@ test suite (`npm test` is a stub).
 ```
 webos-hub/
 ├── frontend/                      # the web app (packaged as the app root)
-│   ├── appinfo.json               # id com.daverui.michelly, v1.3.1, type web, disableBackHistoryAPI true
+│   ├── appinfo.json               # id com.daverui.michelly, v1.3.2, type web, disableBackHistoryAPI true
 │   ├── index.html                 # loads webOSTV.js, webOSTV-dev.js, js/ajax.js, js/storage.js, js/index.js
 │   ├── js/index.js                # server picker, auto-discovery, iframe handoff
 │   ├── js/ajax.js                 # XMLHttpRequest wrapper
@@ -113,7 +113,7 @@ webos-hub/
 │   └── sync-version.js            # copies package.json version into frontend/appinfo.json
 ├── .github/workflows/build.yml, .github/workflows/codeql-analysis.yml
 ├── dev.sh                         # Docker wrapper around ares-* (ghcr.io/oddstr13/docker-tizen-webos-sdk)
-├── package.json                   # name com.daverui.michelly, version 1.3.1, license MPL-2.0
+├── package.json                   # name com.daverui.michelly, version 1.3.2, license MPL-2.0
 ├── package-lock.json, LICENSE (MPL-2.0), CONTRIBUTORS.md, renovate.json, .editorconfig, .gitignore
 └── docs/                          # this corpus
 ```
@@ -158,7 +158,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 | `NativeShell` / `AppHost` | The bridge object installed into the iframe by `frontend/js/webOS.js`, implementing jellyfin-web's native-shell contract. |
 | `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, auto_connect, id, Name, hosturl}`. |
 | `_deviceId2` | The generated device id, built jellyfin-web style from `navigator.userAgent` plus a timestamp. |
-| IPK | The architecture-independent package `build/com.daverui.michelly_1.3.1_all.ipk`. |
+| IPK | The architecture-independent package `build/com.daverui.michelly_1.3.2_all.ipk`. |
 | HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel; this fork's is `https://daver-ui.github.io/webos-hub/repo.json`. |
 | Package manifest | The `manifest` object embedded in a repository package entry: `type`, `ipkUrl`, `ipkHash`, … |
 

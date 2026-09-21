@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Architecture of the Jellyfin webOS client fork — the webview shell, server picker and LAN discovery, the iframe handoff, the NativeShell bridge and the bundled Luna service.
 tags: [architecture, webview, luna, iframe, handoff, discovery, nativeshell, postmessage, jellyfin]
-version: 1.3
+version: 1.4
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -141,6 +141,10 @@ OK (13) and Space (32) toggle the auto-connect checkbox via `handleCheckbox`.
 | `_deviceId2` | Device id, generated jellyfin-web style: `btoa([navigator.userAgent, Date.now()].join('|'))` with `=` replaced by `1`. |
 | `connected_servers` | LRU map (max 4) of `{baseurl, auto_connect, id, Name, hosturl}` keyed by server id. |
 
+The map is written only on a successful connect (`handleSuccessServerInfo` / `handleSuccessManifest`).
+A failed connect leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence log
+[#14](upstream-provenance.md#divergence-log)).
+
 No credentials are stored by the wrapper; sign-in happens inside jellyfin-web.
 
 ### Luna endpoints reached
@@ -236,7 +240,11 @@ The `1.3.1` fix (divergence log
 [#13](upstream-provenance.md#divergence-log)) stores the new entry through the keyed `lruStrategy`
 helper (max **4**, keyed by server id) and every write/remove uses the `connected_servers` key.
 
-> Behaviour note: correcting that key also activates upstream's `handleFailure` intent — a failed request now clears the whole `connected_servers` map (previously an inert no-op). It is tracked as a follow-up in [upstream-provenance](upstream-provenance.md#divergence-log).
+> Behaviour note: correcting that key briefly activated upstream's `handleFailure` intent in `1.3.1` —
+> a failed request cleared the whole `connected_servers` map. `1.3.2` removed that call (divergence log
+> [#14](upstream-provenance.md#divergence-log)): `handleFailure` receives only `{error}`, so it has no
+> server identity in scope, and a transient failed connect (server off, timeout) must not forget the
+> other saved servers. The map now changes only through the success paths.
 
 ### Assuming Left/Right moves focus
 

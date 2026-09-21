@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.3
+version: 1.4
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -85,6 +85,7 @@ Changes to upstream files made by this fork.
 | 11 | `frontend/assets/*.png`, `frontend/submission-icon.png` | Replaced the upstream Jellyfin artwork with a generated "MC" monogram mark | Full rebrand; no Jellyfin artwork reused | Applied |
 | 12 | `frontend/js/index.js` | Add an ES5 `Array.prototype.includes` polyfill at the top of the file | webOS 3.0 / Chromium 38 compatibility: `webOSTV.js` uses `Array.prototype.includes` (Chrome 47+) in the `getSystemInfo` `missingConfigs` path, which throws on Chromium 38 and leaves `deviceInfo` undefined | Applied |
 | 13 | `frontend/js/index.js` | Fix the server-persistence defects: store the new entry through the keyed `lruStrategy` helper and use the correct `connected_servers` localStorage key (lines 297, 359–367, 392) | Upstream defect: `.unshift()` on a plain object threw, the wrong key `connected_server` was written with an undefined `servers` variable, and the id-changed/failure paths used the wrong key | Applied |
+| 14 | `frontend/js/index.js` | Remove the `storage.remove('connected_servers')` call from `handleFailure` | `#13` restored the correct `connected_servers` key, which activated upstream's intent: any single failed request wiped the whole saved-server LRU. `handleFailure` receives only `{error}` — it has no server identity in scope — and a failed connect is usually transient (server off, timeout), so forgetting every server is worse UX than keeping it; the app self-heals on the next successful connect | Applied |
 
 `tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
 same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is
@@ -95,12 +96,15 @@ Known follow-ups:
 
 | Follow-up | Why | Notes |
 | --- | --- | --- |
-| Scope the `handleFailure` LRU wipe (`frontend/js/index.js`) | 1.3.1 corrected the `connected_server` → `connected_servers` key, which activates upstream's intent: any failed request now clears the whole `connected_servers` map | Behaviour change; consider deleting only the failing entry, or dropping the `remove` — see architecture.md#common-mistakes. |
 | Resolve `requiredACG` | Packaging/submission warning | Open decision; `[]` is wrong because the app calls Luna. |
 | Fix upstream CSS defects | Cosmetic; `main.css:44–45` invalid `flex-wrap`, `:156` stray token | See below. |
 
 Resolved in `1.3.1` — see divergence log [#12](#divergence-log)/[#13](#divergence-log): the
 `Array.prototype.includes` polyfill and the upstream picker/LRU persistence bugs are now **applied**.
+
+Resolved in `1.3.2` — see divergence log [#14](#divergence-log): the `handleFailure` LRU wipe
+activated by the [#13](#divergence-log) key correction was removed, so a failed connect no longer
+clears the whole `connected_servers` map. The prior follow-up row is therefore closed.
 
 The rebrand landed in version **`1.3.0`** with the new app id `com.daverui.michelly`, so the app no
 longer collides with the official `org.jellyfin.webos` webosbrew entry — that follow-up is resolved.

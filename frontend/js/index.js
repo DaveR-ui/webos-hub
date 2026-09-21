@@ -402,7 +402,6 @@ function handleFailure(data) {
     }
 
     hideConnecting();
-    storage.remove('connected_servers');
     curr_req = false;
 }
 
