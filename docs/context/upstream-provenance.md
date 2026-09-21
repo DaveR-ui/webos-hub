@@ -3,7 +3,7 @@ last_updated: 2026-09-21
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.8
+version: 1.9
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -98,6 +98,8 @@ Changes to upstream files made by this fork.
 | 24 | `frontend/css/main.css` | Visual restyle: removed the upstream Jellyfin-blue `#00A4DC` accent in favour of the app's own violet palette (`#C9A6FF`) on the `#180C33` brand background; also removed the stray `server_card_url` token (the last remaining upstream CSS defect) | Align the shipped UI with the fork's own identity established in the rebrand (#2, #11), and close the stray-token follow-up | Applied |
 | 25 | `frontend/appinfo.json` | `appDescription` → `"MiChelly - a standalone media client for webOS."` (version unchanged) | De-brand the app description; supersedes the wording recorded in #21 | Applied |
 | 26 | `frontend/assets/banner-dark.png`, `frontend/assets/splash.png` | Regenerated both binaries with ImageMagick: brand gradient `#2A1A4A`→`#0B0616`, `#150B2B` monogram badge with a `#3A2E5C` border, amber `#F2B03D` "MC" + accent bar and cream `#F5EFE6` "MiChelly" wordmark (banner 1920×640, splash 1920×1080). The Jellyfin-blue is not reused and the rendered subtitle now reads **"webOS media client"** — the upstream text is gone | Complete the de-brand of the shipped picker banner and launch splash: the rebrand (#11) replaced the icon/submission artwork, but these two binaries kept the upstream wordmark until this pass | Applied |
+| 27 | `package.json` | `version` `1.3.2` → `1.3.3` (aligned with `frontend/appinfo.json`) and `description` → `"MiChelly - a standalone media client for webOS"` (de-branded) | Restore a single source of truth for the version — the Build workflow (#28) now fails on any `package.json` / `frontend/appinfo.json` drift — and finish de-branding the package metadata | Applied |
+| 28 | `.github/workflows/build.yml` | Build workflow now publishes to `gh-pages`: trigger is `push` on `master` + `workflow_dispatch` (plus the existing `release: published`), workflow-level `permissions: contents: write`, a `Verify version consistency` gate, a `Generate repository document` step (`npm run repo`), and a `Publish to gh-pages` step (native git + the default `GITHUB_TOKEN`; runs on `push`/`workflow_dispatch` only) | Automate the HBC repository publish instead of copying `repo.json` and the IPK by hand — see [hbc-distribution-plan](hbc-distribution-plan.md) | Applied |
 
 `frontend/js/app/*.js` (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) and
 `frontend/css/app.css` are **new, fork-only files** — they do **not** exist upstream and are therefore

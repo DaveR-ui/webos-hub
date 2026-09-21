@@ -73,7 +73,13 @@ npm run manifest  # node tools/gen-manifest.js build/com.daverui.michelly.manife
 ```
 
 Version handling: bump `version` in `package.json`, then run `npm run version` to copy it into
-`frontend/appinfo.json`.
+`frontend/appinfo.json`. The Build workflow fails the run if the two versions disagree.
+
+Publishing is automated: pushing to `master` (or running the **Build** workflow via
+`workflow_dispatch`) packages the app, regenerates `repo.json` with `npm run repo`, and pushes
+`repo.json` plus the IPK to the `gh-pages` branch served by GitHub Pages. A local `npm run package` /
+`npm run repo` is only for pre-flight inspection — see
+[`docs/protocols/release-protocol.md`](docs/protocols/release-protocol.md).
 
 ### Full WebOS SDK Installation
 

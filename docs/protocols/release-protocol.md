@@ -4,7 +4,7 @@ category: protocols
 tags: [release, ipk, hbc, sha256, ares-package, version, media-server]
 aliases: [Release Protocol, Publish a MiChelly webOS release]
 related: [hbc-distribution-plan, upstream-provenance]
-version: 1.5
+version: 1.6
 status: active
 ---
 
@@ -35,6 +35,10 @@ npm run version    # node tools/sync-version.js && git add frontend/appinfo.json
 It must differ from the version currently advertised in the repository. HBC compares version strings
 by equality, so a repeated version shows a permanent update. Never edit `frontend/appinfo.json`
 directly — it is generated from `package.json`.
+
+CI enforces this: the **Build** workflow's `Verify version consistency` step fails the run when
+`package.json` and `frontend/appinfo.json` disagree, so a forgotten `npm run version` is caught
+before anything is published (step 6).
 
 ### 2. Validate the package
 
@@ -80,6 +84,10 @@ This automates the step: it reads `frontend/appinfo.json` plus the built IPK, co
 `ipkHash.sha256`, and writes `build/repo.json` with HTTPS URLs and an embedded `manifest`. `baseUrl`
 defaults to `https://daver-ui.github.io/webos-hub` (override via argv or `$HBC_REPO_BASE_URL`).
 
+`npm run repo` also runs in CI as the **Generate repository document** step of the Build workflow
+(step 6). Locally it is only for **pre-flight inspection** — the document that gets published is the
+one CI regenerates from the same commit.
+
 Confirm the result contains:
 
 - an embedded `manifest` (not `manifestUrl`);
@@ -94,24 +102,42 @@ manual edit. See [hbc-distribution-plan](../context/hbc-distribution-plan.md).
 
 ### 6. Publish to the HTTPS static host
 
-This fork publishes to **GitHub Pages** of `DaveR-ui/webos-hub`, served from the **`gh-pages` orphan
-branch** (Pages: source = branch `gh-pages`, path `/`; `https_enforced: true`). An orphan branch keeps
-`master`'s `.gitignore` intact — the IPK is gitignored, so it is never committed to `master`. Build the
-branch in a separate worktree containing:
+Publishing is **automated by the Build workflow** (`.github/workflows/build.yml`). Pushing to
+`master` — or running the workflow by hand via **Actions → Build → Run workflow**
+(`workflow_dispatch`) — builds the IPK, regenerates `repo.json` and publishes both to the
+**`gh-pages`** branch of `DaveR-ui/webos-hub`, which GitHub Pages serves (source = branch `gh-pages`,
+path `/`; `https_enforced: true`). As an orphan branch, `gh-pages` keeps `master`'s `.gitignore`
+intact — the IPK is gitignored and reaches the TV only through `gh-pages`.
+
+The **Publish to gh-pages** step runs on `push` and `workflow_dispatch` (**not** on `release`). It:
+
+- checks `origin/gh-pages` out into a `git worktree`, preserving the files that exist only on that
+  branch — `icons/michelly.png`, `index.html`, `.nojekyll`;
+- refreshes `repo.json` and `ipk/com.daverui.michelly_<version>_all.ipk` (removing stale IPKs);
+- commits and pushes `HEAD:gh-pages` with the workflow's default `GITHUB_TOKEN`, and skips the commit
+  when nothing changed.
+
+A `GITHUB_TOKEN` push cannot re-trigger the Build workflow; the trigger's `branches: [master]` filter
+is belt-and-braces on top of that.
+
+Published layout on `gh-pages`:
 
 - `repo.json` — the generated `{"packages":[...]}` document;
-- `ipk/com.daverui.michelly_1.3.2_all.ipk`;
+- `ipk/com.daverui.michelly_<version>_all.ipk`;
 - `icons/michelly.png`;
 - `index.html` — a small landing page stating the source URL;
 - `.nojekyll` — disables Jekyll.
 
+**Manual fallback** — only if a Build run fails or you must publish by hand. Build locally, then copy
+the artifacts into the worktree and push directly:
+
 ```bash
-npm run package                       # -> build/com.daverui.michelly_1.3.2_all.ipk
+npm run package                       # -> build/com.daverui.michelly_<version>_all.ipk
 npm run repo                          # -> build/repo.json (HTTPS URLs + sha256)
 # in a worktree checked out at the gh-pages orphan branch:
-#   copy build/repo.json -> repo.json, build/com.daverui.michelly_1.3.2_all.ipk -> ipk/, icon -> icons/
+#   copy build/repo.json -> repo.json, build/com.daverui.michelly_<version>_all.ipk -> ipk/, icon -> icons/
 git -C <worktree> add -A
-git -C <worktree> commit -m "Publish com.daverui.michelly 1.3.2"
+git -C <worktree> commit -m "Publish com.daverui.michelly <version>"
 git -C <worktree> push origin gh-pages
 # enable Pages once, if not already:
 gh api -X POST repos/DaveR-ui/webos-hub/pages -f source[branch]=gh-pages -f source[path]=/
@@ -145,8 +171,12 @@ With Docker, prefix each `ares-*` call with `./dev.sh`.
       exact IPK.
 - [ ] The repository document embeds the manifest, uses `type: "web"`, sets `rootRequired: false`, and
       carries HTTPS `ipkUrl` / `iconUri`.
-- [ ] `repo.json` and the IPK are reachable over HTTPS at the published source URL
-      (`https://daver-ui.github.io/webos-hub/repo.json`).
+- [ ] The Build run for the pushed commit succeeded (the `Verify version consistency` step passed)
+      and its **Publish to gh-pages** step pushed to `gh-pages` — check the run log; a
+      `No publish changes to commit.` message means nothing was published.
+- [ ] `repo.json` is reachable over HTTPS at the published source URL
+      (`https://daver-ui.github.io/webos-hub/repo.json`) and advertises the new version and the new
+      IPK's `ipkHash.sha256` (Pages caches for ~10 minutes).
 - [ ] HBC refreshed, Update installed, and the app launches with the new version.
 - [ ] Any change to an upstream file is recorded in the
       [divergence log](../context/upstream-provenance.md#divergence-log).
@@ -174,7 +204,8 @@ npm run check
 npm run package
 npm run repo
 sha256sum build/com.daverui.michelly_<version>_all.ipk
-# 6. publish build/repo.json + the IPK to gh-pages, then refresh HBC on the TV
+# 6. commit and push to master — CI builds, regenerates repo.json and publishes to gh-pages
+#    (or run the Build workflow via workflow_dispatch); then refresh HBC on the TV
 ```
 
 ## Common mistakes
@@ -192,10 +223,19 @@ and `usr/palm/services/com.daverui.michelly.service/**`.
 `frontend/appinfo.json` is generated from `package.json` by `npm run version`. Editing it directly
 creates two sources of truth and a likely version mismatch in the manifest.
 
-### The version was not bumped before publishing
+### The version was not bumped before pushing
 
 HBC compares version strings by equality. Publishing the same version again leaves a permanent
-"Update" that never changes anything.
+"Update" that never changes anything. Bump `version` and run `npm run version` **before** pushing to
+`master` — a same-version republish does not surface as an Update. CI's `Verify version consistency`
+step fails the run when `package.json` and `frontend/appinfo.json` drift apart, but it cannot know
+that both were left unchanged.
+
+### Expecting a GitHub Release to update the HBC repository
+
+The **Publish to gh-pages** step runs on `push` to `master` and on `workflow_dispatch` only. Publishing
+a GitHub **release** builds the package and attaches it to the release, but does **not** refresh
+`gh-pages` — the repository document stays at the previous version until the next `master` push.
 
 ### repo.json still points at the previous IPK hash
 

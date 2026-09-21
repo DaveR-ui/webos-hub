@@ -3,7 +3,7 @@ last_updated: 2026-09-21
 status: active
 description: Agent-facing entry point for MiChelly, the webOS media client fork — stack, slices, commands, conventions, domain entities and the context index.
 tags: [entry-point, project, webos, media-server, fork, client]
-version: 2.7
+version: 2.8
 doc_language: english
 ---
 
@@ -12,7 +12,7 @@ doc_language: english
 ## Overview
 
 This repository is **MiChelly**, a **standalone media client for webOS**
-(`com.daverui.michelly`, version `1.3.2`). It began as a
+(`com.daverui.michelly`, version `1.3.3`). It began as a
 **verbatim import of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos)**
 (v1.2.2, upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`), forked for a personal
 **webOS 3.0** TV, and was rebranded to its own identity in version `1.3.0` (app id, service id,
@@ -49,7 +49,7 @@ the device profile. Native-shell duties (device info, app identity, exit) live i
 | Storage | Browser `localStorage` (keys `_deviceId2`, `connected_servers`, `michelly_sessions`) |
 | Styling | Hand-written CSS, flexbox only (no CSS grid), no preprocessor or build step (`frontend/css/`) |
 | Upstream | Imported from `jellyfin/jellyfin-webos` v1.2.2; rebranded in `1.3.0` (see [divergence log](context/upstream-provenance.md#divergence-log)) |
-| Distribution | Custom Homebrew Channel (HBC) repository — IPK plus manifest |
+| Distribution | Custom Homebrew Channel (HBC) repository — IPK plus manifest, published to `gh-pages` automatically by the Build workflow on `master` |
 | License | MPL-2.0, with incorporated Apache-2.0 parts |
 
 **Architecture pattern:** self-contained native client (app-shell views + ES5 REST client + native
@@ -82,9 +82,10 @@ defined in `package.json`; the Docker wrapper (`./dev.sh`) runs the same `ares-*
 | --- | --- |
 | Install the webOS toolkit | `npm install` (devDependency `@webosose/ares-cli` ^2.4.0) |
 | Validate the package | `npm run check` → `ares-package --check` |
-| Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/com.daverui.michelly_1.3.2_all.ipk` |
+| Build the IPK | `npm run package` → `ares-package --no-minify --outdir build/ services frontend` → `build/com.daverui.michelly_1.3.3_all.ipk` |
 | Generate the HBC manifest | `npm run manifest` → `node tools/gen-manifest.js build/com.daverui.michelly.manifest.json` |
-| Generate the HBC repository document | `npm run repo` → `node tools/gen-repo.js` → `build/repo.json` (`{"packages":[...]}`, HTTPS URLs + `ipkHash.sha256`) |
+| Generate the HBC repository document | `npm run repo` → `node tools/gen-repo.js` → `build/repo.json` (`{"packages":[...]}`, HTTPS URLs + `ipkHash.sha256`); also run by CI |
+| Publish the HBC repository | push to `master` (or run **Build** via `workflow_dispatch`): CI builds, runs `npm run repo` and pushes `repo.json` + the IPK to `gh-pages` (the `release` event does **not** publish) |
 | Sync the version | `npm run version` → `node tools/sync-version.js && git add frontend/appinfo.json` |
 | Remove build output | `npm run clean` → `rm -rf build/` |
 | Install on a TV | `npm run deploy` → `ares-install build/com.daverui.michelly_${version}_all.ipk` |
@@ -103,7 +104,7 @@ test suite (`npm test` is a stub).
 ```
 webos-hub/
 ├── frontend/                      # the web app (packaged as the app root)
-│   ├── appinfo.json               # id com.daverui.michelly, v1.3.2, type web, disableBackHistoryAPI true
+│   ├── appinfo.json               # id com.daverui.michelly, v1.3.3, type web, disableBackHistoryAPI true
 │   ├── index.html                 # app shell: picker/login/browse/item/player views; loads webOSTV.js, webOSTV-dev.js, js/ajax.js, js/storage.js, js/app/*.js, js/index.js
 │   ├── js/index.js                # server picker, auto-discovery, connect flow, visible-only D-pad + in-app back stack
 │   ├── js/ajax.js                 # XMLHttpRequest wrapper
@@ -124,9 +125,10 @@ webos-hub/
 │   ├── gen-repo.js                # writes build/repo.json ({"packages":[...]}, HTTPS URLs + IPK sha256)
 │   ├── gen-manifest.js            # writes a HBC-style manifest with the IPK's sha256
 │   └── sync-version.js            # copies package.json version into frontend/appinfo.json
-├── .github/workflows/build.yml, .github/workflows/codeql-analysis.yml
+├── .github/workflows/build.yml    # CI: version gate, package, npm run repo, publish to gh-pages
+├── .github/workflows/codeql-analysis.yml
 ├── dev.sh                         # Docker wrapper around ares-* (ghcr.io/oddstr13/docker-tizen-webos-sdk)
-├── package.json                   # name com.daverui.michelly, version 1.3.2, license MPL-2.0
+├── package.json                   # name com.daverui.michelly, version 1.3.3, license MPL-2.0
 ├── package-lock.json, LICENSE (MPL-2.0), CONTRIBUTORS.md, renovate.json, .editorconfig, .gitignore
 └── docs/                          # this corpus
 ```
@@ -153,8 +155,8 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
   Always use `npm run package`, which names `services frontend` explicitly.
 - **Version is single-sourced.** Bump `version` in `package.json` and run `npm run version` to copy it
   into `frontend/appinfo.json`. HBC compares version strings by equality — a repeated version
-  produces a permanent phantom update. See
-  [hbc-distribution-plan](context/hbc-distribution-plan.md).
+  produces a permanent phantom update. CI enforces the pairing: the Build workflow fails when the two
+  files disagree. See [hbc-distribution-plan](context/hbc-distribution-plan.md).
 - **`frontend/appinfo.json` caveats for webOS 3.0.** `disableBackHistoryAPI` is a post-3.0 property
   (ignored on 3.0) and `requiredACG` is absent. Both are open compatibility decisions — see
   [webos-3-compatibility](context/webos-3-compatibility.md).
@@ -174,7 +176,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 | `window.Michelly` | The app's shared JS namespace (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) built by `frontend/js/app/*`. |
 | `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, Address, auto_connect, id, Name}`. |
 | `_deviceId2` | The generated device id, built jellyfin-web style from `navigator.userAgent` plus a timestamp. |
-| IPK | The architecture-independent package `build/com.daverui.michelly_1.3.2_all.ipk`. |
+| IPK | The architecture-independent package `build/com.daverui.michelly_1.3.3_all.ipk`. |
 | HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel; this fork's is `https://daver-ui.github.io/webos-hub/repo.json`. |
 | Package manifest | The `manifest` object embedded in a repository package entry: `type`, `ipkUrl`, `ipkHash`, … |
 
@@ -190,7 +192,8 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 - [`context/hbc-distribution-plan.md`](context/hbc-distribution-plan.md) — approved custom Homebrew
   Channel repository distribution plan; live at `https://daver-ui.github.io/webos-hub/repo.json`.
 - [`context/context-index.md`](context/context-index.md) — the hub for the `docs/context/` folder.
-- [`protocols/release-protocol.md`](protocols/release-protocol.md) — the hand-run release checklist.
+- [`protocols/release-protocol.md`](protocols/release-protocol.md) — the release checklist; build and
+  publish to `gh-pages` run in CI on a `master` push (manual publish is the fallback).
 
 ## Common Lookups
 
