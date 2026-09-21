@@ -7,16 +7,16 @@
       "rootRequired": false,
       "manifest": {
         "id": "com.daverui.michelly",
-        "version": "1.3.2",
+        "version": "1.3.3",
         "type": "web",
         "title": "MiChelly",
-        "appDescription": "MiChelly - a webOS client that connects to a Jellyfin server and opens its web UI.",
+        "appDescription": "MiChelly - a standalone media client for webOS.",
         "iconUri": "https://daver-ui.github.io/webos-hub/icons/michelly.png",
         "sourceUrl": "https://github.com/DaveR-ui/webos-hub",
         "rootRequired": false,
-        "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/com.daverui.michelly_1.3.2_all.ipk",
+        "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/com.daverui.michelly_1.3.3_all.ipk",
         "ipkHash": {
-          "sha256": "af4e544a490eb5f0710d90136c93f5221fbbdd8ac2e880777ecd61ad6a6c1373"
+          "sha256": "0de28053b8ae6c54823d2c6166c1838b86353b3e9824965a9e4662d0fa8d1ab9"
         }
       }
     }
