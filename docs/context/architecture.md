@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Architecture of the Jellyfin webOS client fork — the webview shell, server picker and LAN discovery, the iframe handoff, the NativeShell bridge and the bundled Luna service.
 tags: [architecture, webview, luna, iframe, handoff, discovery, nativeshell, postmessage, jellyfin]
-version: 1.1
+version: 1.3
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -226,12 +226,17 @@ not load — check the server URL and `/web/manifest.json`, not the wrapper's CS
 
 ### A newly discovered server is not persisted
 
-**Upstream defect present in v1.2.2** (not a fork change): `frontend/js/index.js:359` calls
-`.unshift()` on the plain object `connected_servers`; `:365` writes the wrong key
-(`connected_server`) using an undefined variable `servers`; `:367` logs `info` out of scope; and
-`:297`/`:392` also use the wrong key, so the `remove` is a no-op. Net effect: a newly discovered
-server may never be saved. Tracked as a follow-up in
-[upstream-provenance](upstream-provenance.md#divergence-log).
+**Fixed in `1.3.1`.** Upstream v1.2.2 had a persistence defect (not a fork change):
+`frontend/js/index.js:359` called `.unshift()` on the plain object `connected_servers`; `:365` wrote
+the wrong key (`connected_server`) using an undefined variable `servers`; `:367` logged `info` out of
+scope; and `:297`/`:392` also used the wrong key, so the `remove` was a no-op. Net effect: a newly
+discovered server could never be saved.
+
+The `1.3.1` fix (divergence log
+[#13](upstream-provenance.md#divergence-log)) stores the new entry through the keyed `lruStrategy`
+helper (max **4**, keyed by server id) and every write/remove uses the `connected_servers` key.
+
+> Behaviour note: correcting that key also activates upstream's `handleFailure` intent — a failed request now clears the whole `connected_servers` map (previously an inert no-op). It is tracked as a follow-up in [upstream-provenance](upstream-provenance.md#divergence-log).
 
 ### Assuming Left/Right moves focus
 
@@ -240,8 +245,9 @@ jellyfin-web, jellyfin-web owns its own focus handling.)
 
 ### Assuming `data.start_url.includes(...)` is safe on old engines
 
-`String.prototype.includes` is polyfilled at the top of `frontend/js/index.js`; `Array.prototype.includes`
-is **not** polyfilled anywhere. See [webos-3-compatibility](webos-3-compatibility.md).
+`String.prototype.includes` is polyfilled at the top of `frontend/js/index.js`; since `1.3.1`
+`Array.prototype.includes` is polyfilled there too (ES5 — divergence log `#12`). See
+[webos-3-compatibility](webos-3-compatibility.md).
 
 ## References
 

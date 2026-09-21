@@ -5,7 +5,7 @@
     "bgImage": "assets/splash.png",
     "title": "MiChelly",
     "type": "web",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "splashBackground": "assets/splash.png",
     "bgColor": "#180C33",
     "vendor": "DaveR-ui",

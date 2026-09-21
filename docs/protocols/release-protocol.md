@@ -4,7 +4,7 @@ category: protocols
 tags: [release, ipk, hbc, sha256, ares-package, version, jellyfin]
 aliases: [Release Protocol, Publish a Jellyfin webOS client release]
 related: [hbc-distribution-plan, upstream-provenance]
-version: 1.2
+version: 1.3
 status: active
 ---
 
@@ -100,18 +100,18 @@ branch** (Pages: source = branch `gh-pages`, path `/`; `https_enforced: true`). 
 branch in a separate worktree containing:
 
 - `repo.json` — the generated `{"packages":[...]}` document;
-- `ipk/com.daverui.michelly_1.3.0_all.ipk`;
+- `ipk/com.daverui.michelly_1.3.1_all.ipk`;
 - `icons/michelly.png`;
 - `index.html` — a small landing page stating the source URL;
 - `.nojekyll` — disables Jekyll.
 
 ```bash
-npm run package                       # -> build/com.daverui.michelly_1.3.0_all.ipk
+npm run package                       # -> build/com.daverui.michelly_1.3.1_all.ipk
 npm run repo                          # -> build/repo.json (HTTPS URLs + sha256)
 # in a worktree checked out at the gh-pages orphan branch:
-#   copy build/repo.json -> repo.json, build/com.daverui.michelly_1.3.0_all.ipk -> ipk/, icon -> icons/
+#   copy build/repo.json -> repo.json, build/com.daverui.michelly_1.3.1_all.ipk -> ipk/, icon -> icons/
 git -C <worktree> add -A
-git -C <worktree> commit -m "Publish com.daverui.michelly 1.3.0"
+git -C <worktree> commit -m "Publish com.daverui.michelly 1.3.1"
 git -C <worktree> push origin gh-pages
 # enable Pages once, if not already:
 gh api -X POST repos/DaveR-ui/webos-hub/pages -f source[branch]=gh-pages -f source[path]=/

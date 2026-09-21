@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the Jellyfin webOS client fork — what is safe, the concrete defects, and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg]
-version: 1.1
+version: 1.2
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -40,28 +40,29 @@ The concrete target is **Chromium 38**.
 | Arrow functions, `let`, template literals, classes, destructuring/spread, `async`/`await`, `fetch` | **None** in the shipped frontend. |
 | `const` | Appears exactly **3×** in `frontend/js/index.js` (lines 60, 63, 66). On Chromium 38 `const` is accepted as a legacy **function-scoped** declaration — not a parse error, but block scoping is degraded. |
 | `String.prototype.includes` | Polyfilled at `frontend/js/index.js:25–35`. Covers `data.start_url.includes("/web")` (line 328) and the `String.prototype.includes` use inside `webOSTV.js`. |
-| `Array.prototype.includes` | **No polyfill anywhere.** |
+| `Array.prototype.includes` | **Polyfilled at the top of `frontend/js/index.js`** (ES5, installed before the `webOS.deviceInfo(...)` call). Covers the `webOSTV.js` `getSystemInfo` `missingConfigs` path. |
 | Promises | Deliberately avoided in the wrapper (jellyfin-web's `Promise` usage is server-side). |
 
 > Caveat: the `const` behaviour on Chromium 38 is the one claim that could not be verified against a
 > real Chromium 38 binary. Treat it as "degraded block scoping, not a crash", not as a guaranteed
 > fact.
 
-### The one real defect for webOS 3.0: `Array.prototype.includes`
+### The one real defect for webOS 3.0: `Array.prototype.includes` (fixed in `1.3.1`)
 
 The bundled `frontend/webOSTVjs-1.2.11/webOSTV.js` uses **`Array.prototype.includes`** in the
 `missingConfigs` check inside the `luna://com.webos.service.tv.systemproperty` `getSystemInfo`
 callback.
 
 - `Array.prototype.includes` is **Chrome 47+**; Chromium 38 does not have it.
-- The shipped frontend contains **no `Array.prototype.includes` polyfill**.
-- On Chromium 38 that path throws `TypeError: t.includes is not a function`, aborting the
+- Since `1.3.1` the shipped frontend **does** polyfill it at the top of `frontend/js/index.js`
+  (ES5, installed before the `webOS.deviceInfo` call).
+- Before that, on Chromium 38 that path threw `TypeError: t.includes is not a function`, aborting the
   `webOS.deviceInfo` fallback and leaving `deviceInfo` `undefined`.
 - It degrades `NativeShell.AppHost.getDeviceProfile` (HDR/Dolby flags become `null`) and `screen`
   (becomes `null`).
 - It is reached only when the TV returns a **non-empty `missingConfigs` list**.
 
-This is the highest-value fix candidate for the `compat` slice.
+This was the highest-value fix for the `compat` slice; it shipped in `1.3.1` (divergence log `#12`).
 
 ### `disableBackHistoryAPI` is ignored on webOS 3.0
 
@@ -121,7 +122,7 @@ and it is **not a supported configuration**.
 
 Concrete, fixable items:
 
-1. Missing `Array.prototype.includes` polyfill (the real defect).
+1. ~~Missing `Array.prototype.includes` polyfill (the real defect).~~ **FIXED in `1.3.1`** — polyfilled at the top of `frontend/js/index.js`.
 2. `disableBackHistoryAPI` ignored on 3.0 (possible double Back handling).
 3. Missing `requiredACG` (open decision, not `[]`).
 4. jellyfin-web rendering on Chromium 38 cannot be verified from the repository.
@@ -141,11 +142,11 @@ The only way to close the question is an **on-device test on the actual webOS 3.
 
 ## Examples
 
-Candidate polyfill for the `compat` slice (not yet applied; it modifies an upstream file and must be
-recorded in the [divergence log](upstream-provenance.md#divergence-log)):
+**APPLIED in `1.3.1`** at the top of `frontend/js/index.js`; the divergence is recorded in the
+[divergence log](upstream-provenance.md#divergence-log) (`#12`):
 
 ```js
-// Add near the existing String.prototype.includes polyfill in frontend/js/index.js
+// Placed at the very top of frontend/js/index.js, before the webOS.deviceInfo(...) call
 if (!Array.prototype.includes) {
     Array.prototype.includes = function (search, start) {
         'use strict';
@@ -164,7 +165,7 @@ On-device test checklist for the target webOS 3.0 TV:
 - [ ] jellyfin-web loads inside the iframe and is usable with the remote.
 - [ ] Playback starts and audio/video are correct.
 - [ ] Back (461) returns to the picker once, without a double action.
-- [ ] `webOS.deviceInfo` resolves (check for the `Array.prototype.includes` error in the console).
+- [ ] `webOS.deviceInfo` resolves — the `Array.prototype.includes` `TypeError` is expected to be gone after `1.3.1` (check the console).
 
 ## Common mistakes
 

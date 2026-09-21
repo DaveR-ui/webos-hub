@@ -5,6 +5,15 @@
  *
 */
 
+//Adds .includes to Array for webOS 3.0 / Chromium < 47 (Array.prototype.includes is Chrome 47+)
+if (!Array.prototype.includes) {
+    Array.prototype.includes = function (search, start) {
+        'use strict';
+        if (start === undefined) { start = 0; }
+        return this.indexOf(search, start) !== -1;
+    };
+}
+
 var curr_req = false;
 var server_info = false;
 var manifest = false;
@@ -294,7 +303,7 @@ function handleSuccessServerInfo(data, baseurl, auto_connect) {
                 displayError("The server ID has changed since the last connection, please check if you are reaching your own server. To connect anyway, click connect again.");
                 delete connected_servers[server_id]
                 connected_servers[data.Id] = ({ 'baseurl': baseurl, 'auto_connect': false, 'id': false })
-                storage.set('connected_server', connected_servers)
+                storage.set('connected_servers', connected_servers)
                 return false
             }
         }
@@ -355,16 +364,20 @@ function handleSuccessManifest(data, baseurl) {
             return;
         }
     }
-    //no id, unshoft generates unique(?) index
-    connected_servers.unshift({
+    //No entry matched: persist the newly confirmed server through the keyed LRU (max 4)
+    connected_servers = getConnectedServers();
+    var new_server_id = data.Id || baseurl;
+    connected_servers = lruStrategy(connected_servers, 4, {
         'baseurl': baseurl,
         'hosturl': hosturl,
         'Name': data.shortname,
         'Address': new URL(baseurl).hostname.slice(0,8),
+        'id': new_server_id,
+        'auto_connect': false
     })
-    storage.set('connected_server', servers)
+    storage.set('connected_servers', connected_servers)
     console.log("martin:handleSuccessManifest added server");
-    console.log(info);
+    console.log(connected_servers[new_server_id]);
 }
 
 function handleAbort() {
@@ -389,7 +402,7 @@ function handleFailure(data) {
     }
 
     hideConnecting();
-    storage.remove('connected_server');
+    storage.remove('connected_servers');
     curr_req = false;
 }
 

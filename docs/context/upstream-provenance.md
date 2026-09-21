@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.1
+version: 1.3
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -83,20 +83,24 @@ Changes to upstream files made by this fork.
 | 9 | `.github/workflows/build.yml` | Manifest path + artifact name | Rebrand | Applied |
 | 10 | `README.md` | Heading + command references to the new id/IPK | Rebrand | Applied |
 | 11 | `frontend/assets/*.png`, `frontend/submission-icon.png` | Replaced the upstream Jellyfin artwork with a generated "MC" monogram mark | Full rebrand; no Jellyfin artwork reused | Applied |
+| 12 | `frontend/js/index.js` | Add an ES5 `Array.prototype.includes` polyfill at the top of the file | webOS 3.0 / Chromium 38 compatibility: `webOSTV.js` uses `Array.prototype.includes` (Chrome 47+) in the `getSystemInfo` `missingConfigs` path, which throws on Chromium 38 and leaves `deviceInfo` undefined | Applied |
+| 13 | `frontend/js/index.js` | Fix the server-persistence defects: store the new entry through the keyed `lruStrategy` helper and use the correct `connected_servers` localStorage key (lines 297, 359–367, 392) | Upstream defect: `.unshift()` on a plain object threw, the wrong key `connected_server` was written with an undefined `servers` variable, and the id-changed/failure paths used the wrong key | Applied |
 
 `tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
 same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is
 fork-local and not tracked as a divergence. The rebrand landed in version `1.3.0` and **did** modify
 upstream files — every such change is listed in the divergence log above.
 
-Known follow-ups (planned, not yet applied):
+Known follow-ups:
 
 | Follow-up | Why | Notes |
 | --- | --- | --- |
-| Add an `Array.prototype.includes` polyfill | webOS 3.0 / Chromium 38 defect | See [webos-3-compatibility](webos-3-compatibility.md). |
+| Scope the `handleFailure` LRU wipe (`frontend/js/index.js`) | 1.3.1 corrected the `connected_server` → `connected_servers` key, which activates upstream's intent: any failed request now clears the whole `connected_servers` map | Behaviour change; consider deleting only the failing entry, or dropping the `remove` — see architecture.md#common-mistakes. |
 | Resolve `requiredACG` | Packaging/submission warning | Open decision; `[]` is wrong because the app calls Luna. |
-| Fix upstream picker/LRU bugs | Newly discovered servers may not persist | See [architecture](architecture.md#common-mistakes). |
 | Fix upstream CSS defects | Cosmetic; `main.css:44–45` invalid `flex-wrap`, `:156` stray token | See below. |
+
+Resolved in `1.3.1` — see divergence log [#12](#divergence-log)/[#13](#divergence-log): the
+`Array.prototype.includes` polyfill and the upstream picker/LRU persistence bugs are now **applied**.
 
 The rebrand landed in version **`1.3.0`** with the new app id `com.daverui.michelly`, so the app no
 longer collides with the official `org.jellyfin.webos` webosbrew entry — that follow-up is resolved.
