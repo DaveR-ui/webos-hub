@@ -1,10 +1,10 @@
 ---
 id: release-protocol
 category: protocols
-tags: [release, ipk, hbc, sha256, ares-package, version, jellyfin]
-aliases: [Release Protocol, Publish a Jellyfin webOS client release]
+tags: [release, ipk, hbc, sha256, ares-package, version, media-server]
+aliases: [Release Protocol, Publish a MiChelly webOS release]
 related: [hbc-distribution-plan, upstream-provenance]
-version: 1.4
+version: 1.5
 status: active
 ---
 

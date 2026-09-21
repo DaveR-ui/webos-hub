@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
-description: Hub for the docs/context folder of the Jellyfin webOS client fork — what belongs here, every file it holds, and what lives elsewhere.
+description: Hub for the docs/context folder of the webOS media client fork — what belongs here, every file it holds, and what lives elsewhere.
 tags: [hub, context, index]
-version: 1.2
+version: 1.3
 related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -29,7 +29,7 @@ touches source.
 
 ### Contents
 
-- [architecture.md](architecture.md) — the app shell and views, the ES5 Jellyfin REST client,
+- [architecture.md](architecture.md) — the app shell and views, the ES5 media-server REST client,
   auth/session, catalog browsing, native playback and the bundled Luna discovery service.
 - [webos-3-compatibility.md](webos-3-compatibility.md) — webOS 3.0 / Chromium 38 compatibility report:
   what is safe, the concrete defects and the on-device test plan.

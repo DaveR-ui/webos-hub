@@ -1,13 +1,13 @@
-# MiChelly — personal webOS client for Jellyfin
+# MiChelly — personal webOS media client
 
 This is a **personal fork** of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos),
 imported verbatim at version **1.2.2** (upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`).
 It is maintained for a personal **webOS 3.0** TV.
 
-It is a **self-contained Jellyfin client**: it shows a server picker, auto-discovers Jellyfin servers
-on the LAN through a bundled Luna service, signs in to the Jellyfin REST API and renders its own
+It is a **self-contained media client**: it shows a server picker, auto-discovers media servers
+on the LAN through a bundled Luna service, signs in to the media-server REST API and renders its own
 library, item-detail and playback views. Media plays in the TV's native `<video>` element from a
-direct-stream URL — there is no iframe and no server-served jellyfin-web.
+direct-stream URL — there is no iframe and no server-served web client.
 
 - Documentation entry point: [`docs/project.md`](docs/project.md)
 - webOS 3.0 compatibility report: [`docs/context/webos-3-compatibility.md`](docs/context/webos-3-compatibility.md)
@@ -95,7 +95,7 @@ ares-package --no-minify services frontend
 
 Fill in the last two parts of the server's LAN IP address and its port, then click **Connect**. The
 app verifies the server through `GET /System/Info/Public`. If there is no saved session for that
-server it asks you to sign in to Jellyfin (the password is never stored); afterwards it opens your
+server it asks you to sign in (the password is never stored); afterwards it opens your
 libraries and you can browse and play with the remote.
 
 ## Testing

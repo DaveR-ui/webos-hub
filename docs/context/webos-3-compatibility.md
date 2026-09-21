@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
-description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly Jellyfin client — what is safe in the shipped ES5 app, the concrete defects, the deferred security debt and the on-device test needed to close the question.
+description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app, the concrete defects, the deferred security debt and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg, security-debt]
-version: 2.0
+version: 2.1
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -11,15 +11,15 @@ related: [architecture, upstream-provenance, hbc-distribution-plan]
 
 ## Problem
 
-The target TV runs **webOS 3.0**. The client is now a **self-contained Jellyfin app**: it renders its
-own views and plays media in its own `<video>` element, talking to the Jellyfin REST API directly
+The target TV runs **webOS 3.0**. The client is now a **self-contained media app**: it renders its
+own views and plays media in its own `<video>` element, talking to the media-server REST API directly
 (see [architecture](architecture.md)). So "does this app work on webOS 3.0" is essentially one
 question:
 
 1. Does the **whole shipped app** (`frontend/`, including the fork-only `frontend/js/app/*.js` and
    `frontend/css/app.css`, plus `services/`) run on the TV's old browser engine?
 
-There is no server-served jellyfin-web in a frame to fall back on any more, so the app's own ES5
+There is no server-served web client in a frame to fall back on any more, so the app's own ES5
 discipline and its own rendering/playback are the entire compatibility surface. webOS 3.x ships an old
 Chromium engine and the app declares no minimum OS version, so the question is not answered by the
 repository itself. This document records the audit and its verdict.
@@ -93,9 +93,9 @@ An empty array would therefore be wrong.
 
 ### The app itself is the compatibility surface
 
-The previous version of this document asked whether the **server-served jellyfin-web** would render on
-Chromium 38. That question no longer applies: the app does not load jellyfin-web at all. What must run
-on Chromium 38 is the app itself, and it does so with a small, fixed feature set:
+The previous version of this document asked whether the **server-served web client** would render on
+Chromium 38. That question no longer applies: the app does not load a server-served web client at all.
+What must run on Chromium 38 is the app itself, and it does so with a small, fixed feature set:
 
 - `XMLHttpRequest` (via `frontend/js/ajax.js`) — not `fetch`;
 - DOM building with `document.createElement` / `textContent` (no innerHTML templating in the app
@@ -108,7 +108,7 @@ JavaScript syntax or a third-party UI framework. That can only be confirmed on t
 
 ### Security debt (deferred)
 
-The native client stores a Jellyfin **access token** in `localStorage` (`michelly_sessions`) instead of
+The native client stores a real **access token** in `localStorage` (`michelly_sessions`) instead of
 storing no credentials, as the old iframe wrapper did. This is an **accepted, deliberate** trade-off
 for a **LAN-only personal client**; the password is never stored. Token encryption/refresh, a
 revocation UI and a logout affordance are explicitly **deferred / non-goal** — the canonical note and
@@ -205,7 +205,7 @@ codecs.
 
 ### Treating the stored session token as audited
 
-`michelly_sessions` holds a real Jellyfin access token in `localStorage`. That is a known, deliberate
+`michelly_sessions` holds a real access token in `localStorage`. That is a known, deliberate
 trade-off — not a hardened design. See
 [architecture.md → Security debt (deferred)](architecture.md#security-debt-deferred).
 

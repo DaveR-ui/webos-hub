@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
-description: Architecture of the MiChelly Jellyfin webOS client — the app shell and views, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback, and the bundled Luna discovery service.
-tags: [architecture, webview, views, jellyfin-rest-api, es5, auth, session, playback, luna, discovery, d-pad, jellyfin]
-version: 2.0
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback, and the bundled Luna discovery service.
+tags: [architecture, webview, views, media-server-rest-api, es5, auth, session, playback, luna, discovery, d-pad, media-server]
+version: 2.1
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -11,10 +11,10 @@ related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 
 ## Problem
 
-A webOS web app must render the Jellyfin UI and play its media itself. jellyfin-web is **not** shipped
-with this app, and a webview cannot open raw sockets for UDP discovery. The client therefore has to
-talk to the **Jellyfin REST API directly**, draw its own views, play media in the TV's own `<video>`
-element, and still let the user find and pick a server on the local network.
+A webOS web app must render the media UI and play its media itself. A server-served web client is
+**not** shipped with this app, and a webview cannot open raw sockets for UDP discovery. The client
+therefore has to talk to the **media-server REST API directly**, draw its own views, play media in the
+TV's own `<video>` element, and still let the user find and pick a server on the local network.
 
 ## Solution
 
@@ -32,7 +32,7 @@ step, no bundler:
 | `frontend/js/ajax.js` | `XMLHttpRequest` wrapper (JSON parse, 5 s timeouts, abort/timeout/error callbacks). |
 | `frontend/js/storage.js` | `localStorage` JSON wrapper. |
 | `frontend/js/app/platform.js` | Device/app identity, device profile, screen size and exit; owns `_deviceId2` and the `Authorization` header parts. **Fork-only.** |
-| `frontend/js/app/api.js` | ES5 XHR Jellyfin REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** |
+| `frontend/js/app/api.js` | ES5 XHR media-server REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** |
 | `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** |
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** |
 | `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`. **Fork-only.** |
@@ -65,8 +65,8 @@ no request is issued and an error is shown. On success it follows:
    - if `michelly_sessions[server.Id]` holds an `accessToken`, reuse it (`setToken`) and open the views;
    - otherwise show `#loginView`.
 
-There is **no** `/web/manifest.json` fetch and **no** `start_url`: the app no longer loads server-served
-jellyfin-web, so none of the old `handoff()` machinery remains.
+There is **no** `/web/manifest.json` fetch and **no** `start_url`: the app no longer loads a
+server-served web client, so none of the old `handoff()` machinery remains.
 
 ### Auth and per-server sessions
 
@@ -85,7 +85,7 @@ Sign-in posts `POST /Users/AuthenticateByName` with `{Username, Pw}`; on success
 Authorization: MediaBrowser Client="MiChelly", Device="LG Smart TV", DeviceId="<id>", Version="<app version>"[, Token="<access token>"]
 ```
 
-### Jellyfin REST endpoints
+### Media-server REST endpoints
 
 | Endpoint | Method | Used for |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence
 
 ### Security debt (deferred)
 
-The native client now stores a Jellyfin **access token** in `localStorage` (`michelly_sessions`) —
+The native client now stores a real **access token** in `localStorage` (`michelly_sessions`) —
 credentials that the old iframe wrapper never persisted. This is an **accepted, deliberate** trade-off
 for a **LAN-only personal client**: the token is scoped to the user's own server and the password
 itself is never stored. Hardening is explicitly **deferred / out of scope** for now:
@@ -296,8 +296,8 @@ otherwise the next upstream merge silently conflicts. The `frontend/js/app/*` fi
 
 ### Expecting `/web/manifest.json` to be read
 
-The app no longer fetches `{baseurl}/web/manifest.json` (`start_url` / `shortname`) and never loads
-server-served jellyfin-web. If a library or poster is blank, the failure is in the REST API call or the
+The app no longer fetches `{baseurl}/web/manifest.json` (`start_url` / `shortname`) and never loads a
+server-served web client. If a library or poster is blank, the failure is in the REST API call or the
 token, not in a missing manifest.
 
 ### Looking for the old `NativeShell` bridge
@@ -327,7 +327,7 @@ helper (max **4**, keyed by server id) and every write/remove uses the `connecte
 ### Assuming Left/Right moves focus
 
 37/39 are intentional no-ops. Only Up/Down traverse the tab order, and only across elements in the
-**visible** view. (jellyfin-web's own focus handling is no longer involved.)
+**visible** view. (The upstream web client's own focus handling is no longer involved.)
 
 ### Assuming `data.start_url.includes(...)` is safe on old engines
 

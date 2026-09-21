@@ -355,7 +355,7 @@ function handleSuccessServerInfo(data, baseurl, auto_connect) {
 
     storage.set('connected_servers', connected_servers);
 
-    // Connected: hand off to the native Jellyfin client views.
+    // Connected: hand off to the native media client views.
     afterConnect(baseurl, data)
     return true;
 }
@@ -390,9 +390,9 @@ function handleFailure(data) {
     } else if (typeof data.error === 'string') {
         displayError(data.error);
     } else if (typeof data.error === 'number' && data.error > 0) {
-        displayError("Got HTTP error " + data.error.toString() + " from server, are you connecting to a Jellyfin Server?")
+        displayError("Got HTTP error " + data.error.toString() + " from server, are you connecting to a media server?")
     } else {
-        displayError("Unknown error occured, are you connecting to a Jellyfin Server?")
+        displayError("Unknown error occured, are you connecting to a media server?")
     }
 
     hideConnecting();
@@ -572,7 +572,7 @@ function verifyThenAdd(server) {
             console.log(server);
             console.log(data);
 
-            // TODO: Do we want to autodiscover only Jellyfin servers, or anything that responds to "who is JellyfinServer?"
+            // TODO: Do we want to autodiscover only media servers, or anything that responds to "who is JellyfinServer?"
             if (data.ProductName == "Jellyfin Server") {
                 server.system_info_public = data;
                 if (!discovered_servers[server.Id]) {

@@ -3,7 +3,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
-*/
+ * Shared chrome for the native media client views: the app-owned deep-purple
+ * palette, large 10-foot typography and clearly visible D-pad focus states.
+ * Flexbox only (Chromium 38) - no CSS grid, no gap, no custom properties.
+ *
+ */
 
 * {
     -webkit-box-sizing: border-box;
@@ -21,8 +25,11 @@ body {
     width: 100%;
     font-size: 36px;
     font-family: -apple-system, "Helvetica", system-ui, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen-Sans", "Ubuntu", "Cantarell", "Helvetica Neue", "Open Sans", sans-serif;
-    background-color: #101010;
-    color: #FFF;
+    color: #F3EFFA;
+    background-color: #0B0616;
+    background-image: -webkit-linear-gradient(top, #180C33 0%, #0B0616 100%);
+    background-image: linear-gradient(to bottom, #180C33 0%, #0B0616 100%);
+    background-repeat: no-repeat;
 }
 
 .container {
@@ -30,7 +37,7 @@ body {
     height: 100%;
     width: 100%;
     vertical-align: middle;
-    color: #FFF;
+    color: #F3EFFA;
     display:-webkit-flex;
     display:flex;
     -webkit-flex-direction: column;
@@ -50,23 +57,27 @@ body {
 
 #logo {
     width: 40%;
-    margin-bottom: 2em;
+    margin-bottom: 1.5em;
+    text-align: center;
 }
 
 #logo img {
     max-width: 100%;
 }
 
+/* Form controls: shared surface, radius and transition for every control. */
+
 input,
 textarea,
 button {
     font-size: 1em;
-    -webkit-transition: all 0.30s ease-in-out;
-    transition: all 0.30s ease-in-out;
+    font-family: inherit;
+    -webkit-transition: all 0.20s ease-in-out;
+            transition: all 0.20s ease-in-out;
     outline: none;
     padding: .5rem 1.25rem;
     margin: 0.8rem 0;
-    border-radius: 0.2rem;
+    border-radius: 0.5rem;
 }
 
 .checkbox-wrapper {
@@ -74,59 +85,91 @@ button {
 }
 
 #error {
-    color: #000;
-    background-color: tomato;
-    border-radius: .2rem;
-    padding: 0.25em 0.5em;
-    font-size: 1.5rem;
+    color: #FFD9DE;
+    background-color: #4A1E2B;
+    border: 2px solid #FF7A8A;
+    border-radius: .4rem;
+    padding: 0.35em 0.6em;
+    font-size: 0.6em;
+    word-wrap: break-word;
 }
 
 input[type=checkbox] {
     margin: 0;
-    width: 1em;
-    height: 1em;
+    width: 1.1em;
+    height: 1.1em;
+    padding: 0;
+    border-radius: 0.25rem;
 }
 
 input[type=text],
 input[type=url],
+input[type=password],
 input[type=checkbox],
 textarea {
-    border: 2px solid #292929;
-    background-color: #292929;
-    color: #FFF;
+    border: 2px solid #3A2E5C;
+    background-color: #241B3D;
+    color: #F3EFFA;
+}
+
+input[type=text]::-webkit-input-placeholder,
+input[type=url]::-webkit-input-placeholder,
+input[type=password]::-webkit-input-placeholder,
+textarea::-webkit-input-placeholder {
+    color: #A99FC4;
+    opacity: 1;
 }
 
 input[type=text]:focus,
 input[type=url]:focus,
+input[type=password]:focus,
 input[type=checkbox]:focus,
 textarea:focus {
-    border-color: #00A4DC;
+    border-color: #C9A6FF;
+    background-color: #2E2350;
+    box-shadow: 0 0 0 3px rgba(201, 166, 255, 0.35);
 }
 
 input[type=text],
 input[type=url],
+input[type=password],
 textarea,
 button {
     width: 100%;
 }
 
 button {
-    background: #292929;
-    border: 0;
-    color: #FFF;
+    background: #2E2350;
+    border: 2px solid #3A2E5C;
+    color: #F3EFFA;
     font-weight: bold;
 }
 
 button:focus {
-    background: #00A4DC;
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
 }
 
 input[type=checkbox]:focus+label {
-    color: #00A4DC;
+    color: #C9A6FF;
 }
 
 input[type=checkbox]:focus {
-    outline: 2px solid #00A4DC;
+    outline: 3px solid #C9A6FF;
+    outline-offset: 2px;
+}
+
+/* Picker form */
+
+#serverInfoForm {
+    background: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.9rem;
+    padding: 1.2rem 1.6rem 1.6rem 1.6rem;
+    box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.45);
 }
 
 #serverurl {
@@ -140,6 +183,7 @@ input[type=checkbox]:focus {
 #serverurl .url-sep {
     -webkit-flex: 0 0 auto;
             flex: 0 0 auto;
+    color: #A99FC4;
 }
 
 #serverurl .url-octet,
@@ -161,28 +205,76 @@ input[type=checkbox]:focus {
             flex: 1.5 1 0;
 }
 
+#connect,
+#loginButton {
+    background: #C9A6FF;
+    border-color: #C9A6FF;
+    color: #1A0F33;
+}
+
+#connect:focus,
+#loginButton:focus {
+    background: #DCC5FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+}
+
+#busy {
+    text-align: center;
+}
+
+#busy h1 {
+    font-size: 1.4em;
+    color: #C9A6FF;
+    margin: 0 0 0.5rem 0;
+}
+
 #serverlist {
     display: -webkit-box;
+    display: -webkit-flex;
     display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
+    -webkit-flex-direction: row;
+            flex-direction: row;
+    -webkit-flex-wrap: wrap;
+            flex-wrap: wrap;
     padding: 0;
+    margin: 0.5rem 0 0 0;
+    list-style: none;
 }
 
 .server_card {
     display: block;
-    flex-grow: 1;
-    flex-basis: 0;
+    -webkit-flex-grow: 1;
+            flex-grow: 1;
+    -webkit-flex-basis: 0;
+            flex-basis: 0;
     text-align: center;
     width: 33%;
     margin: 0.3em;
+    padding: 0.6rem 0.4rem;
+    background: #2E2350;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.6rem;
 }
-server_card_url
-.server_card_version, .server_card_url {
-    color: gray;
+
+.server_card_title {
+    color: #F3EFFA;
+    font-weight: bold;
+    font-size: 0.9em;
+    margin: 0.2em auto;
+    width: 90%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.server_card_version,
+.server_card_url {
+    color: #A99FC4;
     font-size: 0.7em;
     margin: 0.3em auto;
     width: 90%;
-    overflow : hidden;
+    overflow: hidden;
+    white-space: nowrap;
     text-overflow: ellipsis;
 }

@@ -10,7 +10,7 @@ var Michelly = window.Michelly = window.Michelly || {};
 (function (namespace) {
     'use strict';
 
-    // Jellyfin's own web client uses a 5s-ish timeout for its metadata calls.
+    // The media server's own web client uses a 5s-ish timeout for its metadata calls.
     var DEFAULT_TIMEOUT = 5000;
 
     var baseUrl = '';

@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
-description: Distribution plan for the Jellyfin webOS client fork through a custom Homebrew Channel repository — package and manifest fields, the release flow, watch-outs and known limits.
+description: Distribution plan for the webOS media client fork through a custom Homebrew Channel repository — package and manifest fields, the release flow, watch-outs and known limits.
 tags: [distribution, homebrew-channel, hbc, release, manifest, ipk]
-version: 1.4
+version: 1.5
 related: [upstream-provenance, architecture]
 ---
 

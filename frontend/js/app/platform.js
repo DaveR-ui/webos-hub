@@ -37,12 +37,12 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     var deviceInfo = null;
 
-    // Same generator jellyfin-web uses: user agent + timestamp, base64, '=' -> '1'.
+    // Same generator the media server's web client uses: user agent + timestamp, base64, '=' -> '1'.
     function generateDeviceId() {
         return btoa([navigator.userAgent, new Date().getTime()].join('|')).replace(/=/g, '1');
     }
 
-    // Kept under the '_deviceId2' key to mimic jellyfin-web.
+    // Kept under the '_deviceId2' key to mimic the media server's web client.
     function getDeviceId() {
         var deviceId = storage.get('_deviceId2');
 

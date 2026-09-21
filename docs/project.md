@@ -1,17 +1,17 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
-description: Agent-facing entry point for MiChelly, the Jellyfin webOS client fork — stack, slices, commands, conventions, domain entities and the context index.
-tags: [entry-point, project, webos, jellyfin, fork, client]
-version: 2.6
+description: Agent-facing entry point for MiChelly, the webOS media client fork — stack, slices, commands, conventions, domain entities and the context index.
+tags: [entry-point, project, webos, media-server, fork, client]
+version: 2.7
 doc_language: english
 ---
 
-# MiChelly — Jellyfin for webOS (personal fork)
+# MiChelly — media client for webOS (personal fork)
 
 ## Overview
 
-This repository is **MiChelly**, a **standalone Jellyfin client for webOS**
+This repository is **MiChelly**, a **standalone media client for webOS**
 (`com.daverui.michelly`, version `1.3.2`). It began as a
 **verbatim import of [`jellyfin/jellyfin-webos`](https://github.com/jellyfin/jellyfin-webos)**
 (v1.2.2, upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`), forked for a personal
@@ -19,13 +19,13 @@ This repository is **MiChelly**, a **standalone Jellyfin client for webOS**
 metadata and artwork). See [upstream-provenance](context/upstream-provenance.md) and
 [webos-3-compatibility](context/webos-3-compatibility.md).
 
-The app is a **self-contained Jellyfin client** — it renders its own UI and plays media itself; it is
-not a wrapper around server-served jellyfin-web:
+The app is a **self-contained media client** — it renders its own UI and plays media itself; it is
+not a wrapper around a server-served web UI:
 
-1. `frontend/` shows a server picker and auto-discovers Jellyfin servers on the LAN via a bundled
+1. `frontend/` shows a server picker and auto-discovers media servers on the LAN via a bundled
    Luna service.
 2. On connect it reads `GET {baseurl}/System/Info/Public`, then reuses a saved per-server session or
-   shows a login view, and talks to the **Jellyfin REST API directly** (ES5 `XMLHttpRequest`).
+   shows a login view, and talks to the **media-server REST API directly** (ES5 `XMLHttpRequest`).
 3. It browses libraries and items, and plays media in a native `<video>` from a direct-stream URL —
    transcoding is a non-goal.
 
@@ -33,7 +33,7 @@ The app owns the picker, discovery, auth/session, catalog browsing, playback, D-
 the device profile. Native-shell duties (device info, app identity, exit) live in
 `frontend/js/app/platform.js`.
 
-> This is a **standalone Jellyfin client**: it federates no other app, service or media server, and
+> This is a **standalone media client**: it federates no other app, service or media server, and
 > none is planned.
 
 ## Technology Stack
@@ -41,7 +41,7 @@ the device profile. Native-shell duties (device info, app identity, exit) live i
 | Layer | Choice |
 | --- | --- |
 | Webview app | Vanilla ES5 JavaScript, no framework, no build step; a single-page app of views (`frontend/index.html`, `frontend/js/`) |
-| REST client / auth | `frontend/js/app/api.js` (ES5 XHR Jellyfin REST client, `Authorization: MediaBrowser …` header) + `frontend/js/app/auth.js` (per-server session in `michelly_sessions`) |
+| REST client / auth | `frontend/js/app/api.js` (ES5 XHR media-server REST client, `Authorization: MediaBrowser …` header) + `frontend/js/app/auth.js` (per-server session in `michelly_sessions`) |
 | Bundled service | webOS Luna JS service `com.daverui.michelly.service` (`services/service.js`), Node `dgram` UDP discovery |
 | Packaging | `ares-package` via `npm run package` (devDependency `@webosose/ares-cli` ^2.4.0) |
 | Tooling | Node CommonJS scripts under `tools/` (`gen-repo.js`, `gen-manifest.js`, `sync-version.js`) |
@@ -57,7 +57,7 @@ the device profile. Native-shell duties (device info, app identity, exit) live i
 catalog and playback; the bundled service owns the only path that needs raw sockets (UDP discovery).
 
 **Secrets posture:** no credentials are ever committed. The app stores server URLs, a generated device
-id, an auto-connect flag and a per-server Jellyfin **access token** in `localStorage`
+id, an auto-connect flag and a per-server **access token** in `localStorage`
 (`michelly_sessions`) on the TV; the **password is never stored**. Storing the token is an accepted,
 deliberate trade-off for a LAN-only personal client — hardening (encryption, refresh, revocation UI,
 logout) is deferred. See the canonical
@@ -67,7 +67,7 @@ logout) is deferred. See the canonical
 
 | Slice | Description | Keywords | Entry points | Primary agents |
 | --- | --- | --- | --- | --- |
-| `frontend` | The self-contained webOS Jellyfin client: server picker, UDP auto-discovery subscription, ES5 Jellyfin REST client, per-server auth/session, catalog browsing, native `<video>` playback, D-pad/Back handling | webview, views, jellyfin-rest-api, es5, auth, session, playback, catalog, d-pad, discovery | `frontend/`, `frontend/js/`, `frontend/js/app/`, `frontend/css/app.css` | coder, tester, reviewer |
+| `frontend` | The self-contained webOS media client: server picker, UDP auto-discovery subscription, ES5 media-server REST client, per-server auth/session, catalog browsing, native `<video>` playback, D-pad/Back handling | webview, views, media-server-rest-api, es5, auth, session, playback, catalog, d-pad, discovery | `frontend/`, `frontend/js/`, `frontend/js/app/`, `frontend/css/app.css` | coder, tester, reviewer |
 | `service` | The bundled non-elevated Luna discovery service (`com.daverui.michelly.service`, UDP 7359 broadcast) | luna, service, discovery, udp, dgram, 7359, subscription | `services/` | coder, reviewer |
 | `packaging` | IPK build, version sync, manifest generation and HBC repository-document generation | ares-package, ipk, gen-manifest, gen-repo, sync-version, sha256, version bump | `package.json`, `tools/`, `frontend/appinfo.json` | coder, tester, documenter |
 | `compat` | webOS 3.0 / Chromium 38 compatibility work | webos-3, chromium-38, es5, polyfill, legacy, compatibility | `docs/context/webos-3-compatibility.md` | explorer, architect, documenter |
@@ -109,7 +109,7 @@ webos-hub/
 │   ├── js/ajax.js                 # XMLHttpRequest wrapper
 │   ├── js/storage.js              # localStorage wrapper
 │   ├── js/app/platform.js         # device/app identity, device profile, screen, exit
-│   ├── js/app/api.js              # ES5 XHR Jellyfin REST client (Authorization: MediaBrowser …)
+│   ├── js/app/api.js              # ES5 XHR media-server REST client (Authorization: MediaBrowser …)
 │   ├── js/app/auth.js             # per-server session store (michelly_sessions)
 │   ├── js/app/ui.js               # view switcher, back stack, state renderers
 │   ├── js/app/catalog.js          # Views -> items -> detail -> episodes, Resume, paging
@@ -167,9 +167,9 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 
 | Entity | Definition |
 | --- | --- |
-| Jellyfin webOS client | The webOS web app `com.daverui.michelly` (`MiChelly`, `frontend/appinfo.json`), installed on the TV. |
+| MiChelly webOS client | The webOS web app `com.daverui.michelly` (`MiChelly`, `frontend/appinfo.json`), installed on the TV. |
 | Bundled service | The non-elevated Luna JS service `com.daverui.michelly.service` shipped inside the same IPK. |
-| Jellyfin REST API | The server's HTTP API (`/System/Info/Public`, `/Users/AuthenticateByName`, `/Users/{id}/Views`, `/Items`, `/Videos/{id}/stream`, …) the app calls directly via `frontend/js/app/api.js`. |
+| Media-server REST API | The server's HTTP API (`/System/Info/Public`, `/Users/AuthenticateByName`, `/Users/{id}/Views`, `/Items`, `/Videos/{id}/stream`, …) the app calls directly via `frontend/js/app/api.js`. |
 | `michelly_sessions` | The `localStorage` map of per-server auth sessions `{userId, accessToken, userName}`, keyed by server id. |
 | `window.Michelly` | The app's shared JS namespace (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) built by `frontend/js/app/*`. |
 | `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, Address, auto_connect, id, Name}`. |
@@ -180,7 +180,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 
 ## Context Index
 
-- [`context/architecture.md`](context/architecture.md) — the app shell and views, the ES5 Jellyfin
+- [`context/architecture.md`](context/architecture.md) — the app shell and views, the ES5 media-server
   REST client, auth/session (`michelly_sessions`), catalog browsing, native playback and the bundled
   Luna service.
 - [`context/webos-3-compatibility.md`](context/webos-3-compatibility.md) — webOS 3.0 / Chromium 38
@@ -196,7 +196,7 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 
 | Symptom | Where |
 | --- | --- |
-| `"The TV cannot discover my Jellyfin server"` | [architecture.md#solution](context/architecture.md#solution) |
+| `"The TV cannot discover my media server"` | [architecture.md#solution](context/architecture.md#solution) |
 | `"Homebrew Channel shows an Update that never goes away"` | [hbc-distribution-plan.md#common-mistakes](context/hbc-distribution-plan.md#common-mistakes) |
 | `"HBC update fails after downloading the whole package"` | [hbc-distribution-plan.md#common-mistakes](context/hbc-distribution-plan.md#common-mistakes) |
 | `"App misbehaves on webOS 3.0 / old Chromium"` | [webos-3-compatibility.md](context/webos-3-compatibility.md) |

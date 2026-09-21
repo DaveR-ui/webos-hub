@@ -1,11 +1,11 @@
 {
-    "appDescription": "MiChelly - a standalone Jellyfin client for webOS.",
+    "appDescription": "MiChelly - a standalone media client for webOS.",
     "icon": "assets/icon-80.png",
     "main": "index.html",
     "bgImage": "assets/splash.png",
     "title": "MiChelly",
     "type": "web",
-    "version": "1.3.2",
+    "version": "1.3.3",
     "splashBackground": "assets/splash.png",
     "bgColor": "#180C33",
     "vendor": "DaveR-ui",
