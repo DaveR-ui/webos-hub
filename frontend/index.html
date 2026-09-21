@@ -9,46 +9,76 @@
 	<meta charset="UTF-8" />
 	<title>MiChelly</title>
 	<link rel="stylesheet" href="css/main.css" type="text/css"/>
+	<link rel="stylesheet" href="css/app.css" type="text/css"/>
 	<script src="webOSTVjs-1.2.11/webOSTV.js" charset="utf-8"></script>
 	<script src="webOSTVjs-1.2.11/webOSTV-dev.js" charset="utf-8"></script>
 	<script src="js/ajax.js" charset="utf-8"></script>
 	<script src="js/storage.js" charset="utf-8"></script>
+	<script src="js/app/platform.js" charset="utf-8"></script>
+	<script src="js/app/api.js" charset="utf-8"></script>
+	<script src="js/app/auth.js" charset="utf-8"></script>
+	<script src="js/app/ui.js" charset="utf-8"></script>
+	<script src="js/app/catalog.js" charset="utf-8"></script>
+	<script src="js/app/player.js" charset="utf-8"></script>
 	<script src="js/index.js"></script>
 </head>
 
 <body onload="Init();">
-	<div class="container">
-		<div id="logo">
-			<img src="assets/banner-dark.png">
-		</div>
-		<div id="serverInfoForm">
-			<p id="error" style="display: none;">&nbsp;</p>
-			<form onsubmit="return false;">
-				<div id="serverurl">
-					<span class="url-prefix">192.168.</span>
-					<input type="text" id="octet3" name="octet3" class="url-octet" value="0" maxlength="3" tabindex="0" />
-					<span class="url-sep">.</span>
-					<input type="text" id="octet4" name="octet4" class="url-octet" value="0" maxlength="3" tabindex="0" />
-					<span class="url-sep">:</span>
-					<input type="text" id="port" name="port" class="url-port" value="8096" maxlength="5" tabindex="0" />
-				</div>
-				<div class="checkbox-wrapper">
-					<input type="checkbox" id="auto_connect" name="auto_connect"
-						onclick="return handleCheckbox(this, true);"
-						onkeydown="return handleCheckbox(this, event);"
-						tabindex="0" value="1" />
-					<label for="auto_connect">Automatically connect on app launch.</label>
-				</div>
-				<button id="connect" type="button" onclick="return handleServerSelect();" tabindex="0">Connect</button>
-				<ul id="serverlist"></ul>
-			</form>
-		</div>
-		<div id="busy" style="display:none;">
-			<h1>Connecting...</h1>
-			<button id="abort" onclick="abort();">Abort</button>
+	<div id="pickerView" class="view active">
+		<div class="container">
+			<div id="logo">
+				<img src="assets/banner-dark.png">
+			</div>
+			<div id="serverInfoForm">
+				<p id="error" style="display: none;">&nbsp;</p>
+				<form onsubmit="return false;">
+					<div id="serverurl">
+						<span class="url-prefix">192.168.</span>
+						<input type="text" id="octet3" name="octet3" class="url-octet" value="0" maxlength="3" tabindex="0" />
+						<span class="url-sep">.</span>
+						<input type="text" id="octet4" name="octet4" class="url-octet" value="0" maxlength="3" tabindex="0" />
+						<span class="url-sep">:</span>
+						<input type="text" id="port" name="port" class="url-port" value="8096" maxlength="5" tabindex="0" />
+					</div>
+					<div class="checkbox-wrapper">
+						<input type="checkbox" id="auto_connect" name="auto_connect"
+							onclick="return handleCheckbox(this, true);"
+							onkeydown="return handleCheckbox(this, event);"
+							tabindex="0" value="1" />
+						<label for="auto_connect">Automatically connect on app launch.</label>
+					</div>
+					<button id="connect" type="button" onclick="return handleServerSelect();" tabindex="0">Connect</button>
+					<ul id="serverlist"></ul>
+				</form>
+			</div>
+			<div id="busy" style="display:none;">
+				<h1>Connecting...</h1>
+				<button id="abort" onclick="abort();">Abort</button>
+			</div>
 		</div>
 	</div>
-	<iframe id="contentFrame" style="display: none;"></iframe>
+
+	<div id="loginView" class="view">
+		<div class="container">
+			<div id="loginForm">
+				<h1>Sign in to Jellyfin</h1>
+				<p id="loginError" class="error-slot" style="display:none;">&nbsp;</p>
+				<form onsubmit="return handleLogin();">
+					<input type="text" id="loginUsername" name="loginUsername" placeholder="Username" tabindex="0" />
+					<input type="password" id="loginPassword" name="loginPassword" placeholder="Password" tabindex="0" />
+					<button id="loginButton" type="submit" tabindex="0">Login</button>
+				</form>
+			</div>
+		</div>
+	</div>
+
+	<div id="browseView" class="view"></div>
+
+	<div id="itemView" class="view"></div>
+
+	<div id="playerView" class="view">
+		<video id="playerVideo"></video>
+	</div>
 </body>
 
 </html>

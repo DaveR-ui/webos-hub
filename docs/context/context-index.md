@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Hub for the docs/context folder of the Jellyfin webOS client fork — what belongs here, every file it holds, and what lives elsewhere.
 tags: [hub, context, index]
-version: 1.1
+version: 1.2
 related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -29,8 +29,8 @@ touches source.
 
 ### Contents
 
-- [architecture.md](architecture.md) — webview shell, server picker and LAN discovery, iframe handoff,
-  the `NativeShell` bridge and the bundled Luna service.
+- [architecture.md](architecture.md) — the app shell and views, the ES5 Jellyfin REST client,
+  auth/session, catalog browsing, native playback and the bundled Luna discovery service.
 - [webos-3-compatibility.md](webos-3-compatibility.md) — webOS 3.0 / Chromium 38 compatibility report:
   what is safe, the concrete defects and the on-device test plan.
 - [upstream-provenance.md](upstream-provenance.md) — fork origin, licensing, the verbatim-import

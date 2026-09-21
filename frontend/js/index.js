@@ -16,19 +16,6 @@ if (!Array.prototype.includes) {
 
 var curr_req = false;
 var server_info = false;
-var manifest = false;
-
-var appInfo = {
-    deviceId: null,
-    deviceName: 'LG Smart TV',
-    appName: 'MiChelly',
-    appVersion: '0.0.0'
-};
-
-var deviceInfo;
-webOS.deviceInfo(function (info) {
-    deviceInfo = info;
-});
 
 //Adds .includes to string to do substring matching
 if (!String.prototype.includes) {
@@ -66,13 +53,19 @@ function navigate(amount) {
         navigationInit();
     } else {
         //Isolate the node that we're after
-        const currentNode = element;
+        var currentNode = element;
 
-        //find all tab-able elements
-        const allElements = document.querySelectorAll('input, button, a, area, object, select, textarea, [contenteditable]');
+        //find all tab-able elements, ignoring controls inside hidden views
+        var candidates = document.querySelectorAll('input, button, a, area, object, select, textarea, [contenteditable]');
+        var allElements = [];
+        for (var i = 0; i < candidates.length; i++) {
+            if (isVisible(candidates[i])) {
+                allElements.push(candidates[i]);
+            }
+        }
 
         //Find the current tab index.
-        const currentIndex = findIndex(allElements, currentNode);
+        var currentIndex = findIndex(allElements, currentNode);
 
         //focus the following element
         if (allElements[currentIndex + amount])
@@ -97,6 +90,10 @@ function rightArrowPressed() {
 }
 
 function backPressed() {
+    // Pop the in-app back stack first; only exit the app when it is empty.
+    if (window.Michelly && Michelly.ui && Michelly.ui.handleBack()) {
+        return;
+    }
     webOS.platformBack();
 }
 
@@ -134,63 +131,48 @@ function handleCheckbox(elem, evt) {
     return false;
 }
 
-// Similar to jellyfin-web
-function generateDeviceId() {
-    return btoa([navigator.userAgent, new Date().getTime()].join('|')).replace(/=/g, '1');
-}
-
-function getDeviceId() {
-    // Use variable '_deviceId2' to mimic jellyfin-web
-
-    var deviceId = storage.get('_deviceId2');
-
-    if (!deviceId) {
-        deviceId = generateDeviceId();
-        storage.set('_deviceId2', deviceId);
-    }
-
-    return deviceId;
-}
-
 function navigationInit() {
     if (isVisible(document.querySelector('#connect'))) {
         document.querySelector('#connect').focus()
     } else if (isVisible(document.querySelector('#abort'))) {
         document.querySelector('#abort').focus()
+    } else {
+        //Fallback for the browse/item/player/login views: focus the first visible tabbable element.
+        var candidates = document.querySelectorAll('input, button, a, area, object, select, textarea, [contenteditable]');
+        for (var i = 0; i < candidates.length; i++) {
+            if (isVisible(candidates[i])) {
+                candidates[i].focus();
+                break;
+            }
+        }
     }
 }
 
 function Init() {
-    appInfo.deviceId = getDeviceId();
+    Michelly.ui.showView('pickerView');
 
-    webOS.fetchAppInfo(function (info) {
-        if (info) {
-            appInfo.appVersion = info.version;
-        } else {
-            console.error('Error occurs while getting appinfo.json.');
+    Michelly.platform.init(function () {
+        navigationInit();
+
+        if (storage.exists('connected_servers')) {
+            connected_servers = storage.get('connected_servers')
+            var first_server = connected_servers[Object.keys(connected_servers)[0]]
+            var prefilled = setPickerFromServerUrl(first_server.baseurl);
+            if (!prefilled) {
+                console.warn('Saved server "' + first_server.baseurl + '" is not on 192.168.x.x; keeping the default server fields.');
+            }
+            document.querySelector('#auto_connect').checked = first_server.auto_connect;
+            if (window.performance && window.performance.navigation.type == window.performance.navigation.TYPE_BACK_FORWARD) {
+                console.log('Got here using the browser "Back" or "Forward" button, inhibiting auto connect.');
+            } else {
+                if (prefilled && first_server.auto_connect) {
+                    console.log("Auto connecting...");
+                    handleServerSelect();
+                }
+            }
+            renderServerList(connected_servers);
         }
     });
-
-    navigationInit();
-
-    if (storage.exists('connected_servers')) {
-        connected_servers = storage.get('connected_servers')
-        var first_server = connected_servers[Object.keys(connected_servers)[0]]
-        var prefilled = setPickerFromServerUrl(first_server.baseurl);
-        if (!prefilled) {
-            console.warn('Saved server "' + first_server.baseurl + '" is not on 192.168.x.x; keeping the default server fields.');
-        }
-        document.querySelector('#auto_connect').checked = first_server.auto_connect;
-        if (window.performance && window.performance.navigation.type == window.performance.navigation.TYPE_BACK_FORWARD) {
-            console.log('Got here using the browser "Back" or "Forward" button, inhibiting auto connect.');
-        } else {
-            if (prefilled && first_server.auto_connect) {
-                console.log("Auto connecting...");
-                handleServerSelect();
-            }
-        }
-        renderServerList(connected_servers);
-    }
 }
 // Just ensure that the string has no spaces, and begins with either http:// or https:// (case insensitively), and isn't empty after the ://
 function validURL(str) {
@@ -340,18 +322,6 @@ function getServerInfo(baseurl, auto_connect) {
     });
 }
 
-function getManifest(baseurl) {
-    curr_req = ajax.request(normalizeUrl(baseurl + "/web/manifest.json"), {
-        method: "GET",
-        success: function (data) {
-            handleSuccessManifest(data, baseurl);
-        },
-        error: handleFailure,
-        abort: handleAbort,
-        timeout: 5000
-    });
-}
-
 function getConnectedServers() {
     connected_servers = storage.get('connected_servers');
     if (!connected_servers) {
@@ -381,12 +351,12 @@ function handleSuccessServerInfo(data, baseurl, auto_connect) {
     }
 
 
-    connected_servers = lruStrategy(connected_servers,4, { 'baseurl': baseurl, 'auto_connect': auto_connect, 'id': data.Id, 'Name':data.ServerName })
+    connected_servers = lruStrategy(connected_servers,4, { 'baseurl': baseurl, 'Address': baseurl, 'auto_connect': auto_connect, 'id': data.Id, 'Name':data.ServerName })
 
     storage.set('connected_servers', connected_servers);
 
-
-    getManifest(baseurl)
+    // Connected: hand off to the native Jellyfin client views.
+    afterConnect(baseurl, data)
     return true;
 }
 
@@ -402,53 +372,6 @@ function lruStrategy(old_items,max_items,new_item) {
         result[current_key] = old_items[current_key]
     }
     return result
-}
-
-function handleSuccessManifest(data, baseurl) {
-    if(data.start_url.includes("/web")){
-        var hosturl = normalizeUrl(baseurl + "/" + data.start_url);
-    } else {
-        var hosturl = normalizeUrl(baseurl + "/web/" + data.start_url);
-    }
-
-    curr_req = false;
-
-    for (var server_id in connected_servers) {
-        var info = connected_servers[server_id]
-        if (info['baseurl' ] == baseurl) {
-            info['hosturl'] = hosturl
-            info['Address'] = info['Address'] || baseurl
-
-            storage.set('connected_servers', connected_servers)
-            console.log("martin:handleSuccessManifest modified server");
-            console.log(info);
-
-        // avoid Promise as it's buggy in some WebOS
-            getTextToInject(function (bundle) {
-                handoff(hosturl, bundle);
-            }, function (error) {
-                console.error(error);
-                displayError(error);
-                hideConnecting();
-                curr_req = false;
-            });
-            return;
-        }
-    }
-    //No entry matched: persist the newly confirmed server through the keyed LRU (max 4)
-    connected_servers = getConnectedServers();
-    var new_server_id = data.Id || baseurl;
-    connected_servers = lruStrategy(connected_servers, 4, {
-        'baseurl': baseurl,
-        'hosturl': hosturl,
-        'Name': data.shortname,
-        'Address': new URL(baseurl).hostname,
-        'id': new_server_id,
-        'auto_connect': false
-    })
-    storage.set('connected_servers', connected_servers)
-    console.log("martin:handleSuccessManifest added server");
-    console.log(connected_servers[new_server_id]);
 }
 
 function handleAbort() {
@@ -485,131 +408,102 @@ function abort() {
     console.log("Aborting...");
 }
 
-function loadUrl(url, success, failure) {
-    var xhr = new XMLHttpRequest();
+/* Post-connect flow: authenticate or reuse the saved per-server session, then browse. */
 
-    xhr.open('GET', url);
+var current_baseurl = null;
+var current_server_id = null;
 
-    xhr.onload = function () {
-        success(xhr.responseText);
-    };
+function afterConnect(baseurl, data) {
+    current_baseurl = normalizeUrl(baseurl);
+    current_server_id = data.Id;
 
-    xhr.onerror = function () {
-        failure("Failed to load '" + url + "'");
+    Michelly.api.setBaseUrl(current_baseurl);
+
+    var session = Michelly.auth.getSession(current_server_id);
+
+    if (session && session.accessToken) {
+        Michelly.api.setToken(session.accessToken);
+        hideConnecting();
+        Michelly.catalog.openViews(session.userId);
+    } else {
+        hideConnecting();
+        showLogin();
+    }
+}
+
+function setLoginBusy(busy) {
+    var button = document.querySelector('#loginButton');
+    if (!button) {
+        return;
+    }
+    button.disabled = !!busy;
+    button.textContent = busy ? 'Signing in...' : 'Login';
+}
+
+function showLogin() {
+    var username = document.querySelector('#loginUsername');
+    var password = document.querySelector('#loginPassword');
+
+    if (username) { username.value = ''; }
+    if (password) { password.value = ''; }
+
+    // Drop any stale in-app back entries (e.g. after a 401) so Back cannot re-enter a tokenless view.
+    if (Michelly.ui.clearBackHandlers) {
+        Michelly.ui.clearBackHandlers();
     }
 
-    xhr.send();
+    Michelly.ui.setError('', '#loginError');
+    setLoginBusy(false);
+    Michelly.ui.showView('loginView');
+
+    if (username) { username.focus(); }
 }
 
-function getTextToInject(success, failure) {
-    var bundle = {};
-
-    var urls = ['js/webOS.js', 'css/webOS.css'];
-
-    // imitate promises as they're borked in at least WebOS 2
-    var looper = function (idx) {
-        if (idx >= urls.length) {
-            success(bundle);
-        } else {
-            var url = urls[idx];
-            var ext = url.split('.').pop();
-            loadUrl(url, function (data) {
-                bundle[ext] = (bundle[ext] || '') + data;
-                looper(idx + 1);
-            }, failure);
-        }
-    };
-    looper(0);
-}
-
-function injectScriptText(document, text) {
-    var script = document.createElement('script');
-    script.type = 'text/javascript';
-    script.innerHTML = text;
-    document.head.appendChild(script);
-}
-
-function injectStyleText(document, text) {
-    var style = document.createElement('style');
-    style.innerHTML = text;
-    document.body.appendChild(style);
-}
-
-function handoff(url, bundle) {
-    console.log("Handoff called with: ", url)
-    //hideConnecting();
-
-    stopDiscovery();
-    document.querySelector('.container').style.display = 'none';
-
-    var contentFrame = document.querySelector('#contentFrame');
-    var contentWindow = contentFrame.contentWindow;
-
-    var timer;
-
-    function onLoad() {
-        clearInterval(timer);
-        contentFrame.contentDocument.removeEventListener('DOMContentLoaded', onLoad);
-        contentFrame.removeEventListener('load', onLoad);
-
-        injectScriptText(contentFrame.contentDocument, 'window.AppInfo = ' + JSON.stringify(appInfo) + ';');
-        injectScriptText(contentFrame.contentDocument, 'window.DeviceInfo = ' + JSON.stringify(deviceInfo) + ';');
-
-        if (bundle.js) {
-            injectScriptText(contentFrame.contentDocument, bundle.js);
-        }
-
-        if (bundle.css) {
-            injectStyleText(contentFrame.contentDocument, bundle.css);
-        }
+function handleLogin() {
+    if (!current_server_id) {
+        Michelly.ui.setError('No server selected.', '#loginError');
+        return false;
     }
 
-    function onUnload() {
-        contentWindow.removeEventListener('unload', onUnload);
+    var username = document.querySelector('#loginUsername').value;
+    var password = document.querySelector('#loginPassword').value;
 
-        timer = setInterval(function () {
-            var contentDocument = contentFrame.contentDocument;
+    if (!username) {
+        Michelly.ui.setError('Please enter a username.', '#loginError');
+        return false;
+    }
 
-            switch (contentDocument.readyState) {
-                case 'loading':
-                    clearInterval(timer);
-                    contentDocument.addEventListener('DOMContentLoaded', onLoad);
-                    break;
+    Michelly.ui.setError('', '#loginError');
+    setLoginBusy(true);
 
-                // In the case of "loading" is not caught
-                case 'interactive':
-                    onLoad();
-                    break;
+    Michelly.auth.login(current_server_id, username, password, function (err, session) {
+        setLoginBusy(false);
+
+        if (err) {
+            if (err.kind === 'unauthorized' || err.error === 401) {
+                Michelly.auth.clearSession(current_server_id);
+                Michelly.ui.setError('Incorrect username or password.', '#loginError');
+            } else {
+                Michelly.ui.setError(Michelly.ui.describeError(err), '#loginError');
             }
-        }, 0);
-    }
+            return;
+        }
 
-    contentWindow.addEventListener('unload', onUnload);
+        Michelly.api.setToken(session.accessToken);
+        Michelly.catalog.openViews(session.userId);
+    });
 
-    // In the case of "loading" and "interactive" are not caught
-    contentFrame.addEventListener('load', onLoad);
-
-    contentFrame.style.display = '';
-    contentFrame.src = url;
+    return false;
 }
 
-window.addEventListener('message', function (msg) {
-    msg = msg.data;
-
-    var contentFrame = document.querySelector('#contentFrame');
-
-    switch (msg.type) {
-        case 'selectServer':
-            startDiscovery();
-            document.querySelector('.container').style.display = '';
-            hideConnecting();
-            contentFrame.style.display = 'none';
-            contentFrame.src = '';
-            break;
-        case 'AppHost.exit':
-            webOS.platformBack();
-            break;
+// A 401/403 while browsing clears the saved session and returns to the login view.
+Michelly.api.onUnauthorized(function () {
+    if (!current_server_id || !Michelly.auth.hasSession(current_server_id)) {
+        return;
     }
+    Michelly.auth.clearSession(current_server_id);
+    Michelly.api.clearToken();
+    showLogin();
 });
 
 /* Server auto-discovery */
@@ -626,7 +520,7 @@ function renderServerList(server_list) {
 
 function renderSingleServer(server_id, server) {
     var server_list = document.getElementById("serverlist");
-    var server_card = document.getElementById("server_" + server.Id);
+    var server_card = document.getElementById("server_" + server_id);
 
     if (!server_card) {
         server_card = document.createElement("li");

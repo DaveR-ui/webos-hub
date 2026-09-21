@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-20
 status: active
-description: webOS 3.0 / Chromium 38 compatibility report for the Jellyfin webOS client fork — what is safe, the concrete defects, and the on-device test needed to close the question.
-tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg]
-version: 1.2
+description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly Jellyfin client — what is safe in the shipped ES5 app, the concrete defects, the deferred security debt and the on-device test needed to close the question.
+tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg, security-debt]
+version: 2.0
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -11,14 +11,18 @@ related: [architecture, upstream-provenance, hbc-distribution-plan]
 
 ## Problem
 
-The target TV runs **webOS 3.0**. The Jellyfin webOS client is a thin shell around the jellyfin-web
-that the user's server hosts, so "does this app work on webOS 3.0" is really two questions:
+The target TV runs **webOS 3.0**. The client is now a **self-contained Jellyfin app**: it renders its
+own views and plays media in its own `<video>` element, talking to the Jellyfin REST API directly
+(see [architecture](architecture.md)). So "does this app work on webOS 3.0" is essentially one
+question:
 
-1. Does the **shipped wrapper** (`frontend/`, `services/`) run on the TV's old browser engine?
-2. Does the **server-served jellyfin-web** render and play on that engine?
+1. Does the **whole shipped app** (`frontend/`, including the fork-only `frontend/js/app/*.js` and
+   `frontend/css/app.css`, plus `services/`) run on the TV's old browser engine?
 
-webOS 3.x ships an old Chromium engine and the app declares no minimum OS version, so neither
-question is answered by the repository itself. This document records the audit and its verdict.
+There is no server-served jellyfin-web in a frame to fall back on any more, so the app's own ES5
+discipline and its own rendering/playback are the entire compatibility surface. webOS 3.x ships an old
+Chromium engine and the app declares no minimum OS version, so the question is not answered by the
+repository itself. This document records the audit and its verdict.
 
 ## Solution
 
@@ -37,15 +41,16 @@ The concrete target is **Chromium 38**.
 
 | Feature | Finding |
 | --- | --- |
-| Arrow functions, `let`, template literals, classes, destructuring/spread, `async`/`await`, `fetch` | **None** in the shipped frontend. |
-| `const` | Appears exactly **3×** in `frontend/js/index.js` (lines 60, 63, 66). On Chromium 38 `const` is accepted as a legacy **function-scoped** declaration — not a parse error, but block scoping is degraded. |
-| `String.prototype.includes` | Polyfilled at `frontend/js/index.js:25–35`. Covers `data.start_url.includes("/web")` (line 328) and the `String.prototype.includes` use inside `webOSTV.js`. |
+| Arrow functions, `let`, template literals, classes, destructuring/spread, `async`/`await`, `fetch`, `Promise` | **None** in the app's own JS — `frontend/js/index.js`, `frontend/js/ajax.js`, `frontend/js/storage.js` and every `frontend/js/app/*.js` file are ES5-only. The vendored `webOSTVjs-1.2.11/` bundle is a pre-built upstream artifact; its one problematic call (`Array.prototype.includes`) is polyfilled below. |
+| `const` | The 3 pre-existing declarations in `frontend/js/index.js` are now `var`; the app's own JS no longer uses `const` anywhere. |
+| `Object.assign`, `Array.from` / `Array.prototype.find`, `Element.closest`, `classList` | Not used in the shipped frontend; `index.js` implements its own index lookup instead of `Array.from(...).findIndex(...)`. |
+| `String.prototype.includes` | Polyfilled at the top of `frontend/js/index.js` (String polyfill lines 21–31; the `Array.prototype.includes` polyfill is at lines 9–15). Covers the `String.prototype.includes` use inside `webOSTV.js`. |
 | `Array.prototype.includes` | **Polyfilled at the top of `frontend/js/index.js`** (ES5, installed before the `webOS.deviceInfo(...)` call). Covers the `webOSTV.js` `getSystemInfo` `missingConfigs` path. |
-| Promises | Deliberately avoided in the wrapper (jellyfin-web's `Promise` usage is server-side). |
+| CSS | `frontend/css/app.css` and `frontend/css/main.css` are **flexbox-only** with `-webkit-` prefixes. **No CSS grid** (Chrome 57+) is used anywhere. |
 
 > Caveat: the `const` behaviour on Chromium 38 is the one claim that could not be verified against a
 > real Chromium 38 binary. Treat it as "degraded block scoping, not a crash", not as a guaranteed
-> fact.
+> fact — though as of this rewrite the shipped frontend uses no `const` at all.
 
 ### The one real defect for webOS 3.0: `Array.prototype.includes` (fixed in `1.3.1`)
 
@@ -58,8 +63,8 @@ callback.
   (ES5, installed before the `webOS.deviceInfo` call).
 - Before that, on Chromium 38 that path threw `TypeError: t.includes is not a function`, aborting the
   `webOS.deviceInfo` fallback and leaving `deviceInfo` `undefined`.
-- It degrades `NativeShell.AppHost.getDeviceProfile` (HDR/Dolby flags become `null`) and `screen`
-  (becomes `null`).
+- It degrades the device profile (`frontend/js/app/platform.js` → HDR/Dolby flags become `null`) and
+  `getScreen` (becomes `null`).
 - It is reached only when the TV returns a **non-empty `missingConfigs` list**.
 
 This was the highest-value fix for the `compat` slice; it shipped in `1.3.1` (divergence log `#12`).
@@ -69,7 +74,7 @@ This was the highest-value fix for the `compat` slice; it shipped in `1.3.1` (di
 `frontend/appinfo.json` sets `"disableBackHistoryAPI": true`. That property is **post-3.0**, so on
 webOS 3.0 it is ignored: the platform keeps managing Back through the HTML history API while
 `frontend/js/index.js` also handles keyCode 461 itself. That is a potential **double-handling**
-conflict — Back may both navigate history and call `webOS.platformBack()`.
+conflict — Back may both navigate history and run the in-app back handler / `webOS.platformBack()`.
 
 ### `requiredACG` is missing
 
@@ -86,24 +91,29 @@ An empty array would therefore be wrong.
   future-proof**.
 - The correct group set is an **open decision**. Do not prescribe `"requiredACG": []`.
 
-### The server-side half: jellyfin-web on Chromium 38
+### The app itself is the compatibility surface
 
-The wrapper hands off to the jellyfin-web the user's server serves. As of jellyfin-web 10.11.x (and
-the renamed 12.x/13.x):
+The previous version of this document asked whether the **server-served jellyfin-web** would render on
+Chromium 38. That question no longer applies: the app does not load jellyfin-web at all. What must run
+on Chromium 38 is the app itself, and it does so with a small, fixed feature set:
 
-- `browserslist` still lists **Chrome 38** (and even Chrome 27).
-- The production bundle is still gated to **ES5** via `es-check` (`.escheckrc` → `"ecmaVersion": "es5"`).
-- It still ships legacy polyfills (`core-js`, `native-promise-only`, `whatwg-fetch`,
-  `abortcontroller-polyfill`, …).
-- Its `CONTRIBUTING.md` states the codebase must support "TVs that are stuck on ancient versions of
-  browser engines".
+- `XMLHttpRequest` (via `frontend/js/ajax.js`) — not `fetch`;
+- DOM building with `document.createElement` / `textContent` (no innerHTML templating in the app
+  views);
+- `<video>` with a direct `/Videos/{id}/stream` source;
+- flexbox layouts with `-webkit-` prefixes.
 
-**However:**
+The residual risk is therefore **codec/container and `<video>` playback behaviour on the TV**, not
+JavaScript syntax or a third-party UI framework. That can only be confirmed on the device.
 
-- Jellyfin's own documentation only *guarantees* the two most recent versions of major browsers.
-- jellyfin-web's React 18 / MUI / TanStack Query stack is not formally supported on an engine as old
-  as Chromium 38.
-- Real-world **rendering and playback on webOS 3.0 is therefore unverified**.
+### Security debt (deferred)
+
+The native client stores a Jellyfin **access token** in `localStorage` (`michelly_sessions`) instead of
+storing no credentials, as the old iframe wrapper did. This is an **accepted, deliberate** trade-off
+for a **LAN-only personal client**; the password is never stored. Token encryption/refresh, a
+revocation UI and a logout affordance are explicitly **deferred / non-goal** — the canonical note and
+the full list live in
+[architecture.md → Security debt (deferred)](architecture.md#security-debt-deferred).
 
 ### Minimum webOS version — what Jellyfin actually says
 
@@ -125,18 +135,19 @@ Concrete, fixable items:
 1. ~~Missing `Array.prototype.includes` polyfill (the real defect).~~ **FIXED in `1.3.1`** — polyfilled at the top of `frontend/js/index.js`.
 2. `disableBackHistoryAPI` ignored on 3.0 (possible double Back handling).
 3. Missing `requiredACG` (open decision, not `[]`).
-4. jellyfin-web rendering on Chromium 38 cannot be verified from the repository.
+4. The app's own rendering and native `<video>` playback on Chromium 38 cannot be verified from the repository.
+5. Deferred security debt (session token in `localStorage`) — see the canonical note in [architecture](architecture.md#security-debt-deferred).
 
 The only way to close the question is an **on-device test on the actual webOS 3.0 TV**.
 
 ## When to use
 
 - Before/after any change to `frontend/`, `services/`, or the target webOS version.
-- When triaging "the app crashes / is blank / Back behaves oddly on the old TV".
+- When triaging "the app crashes / is blank / Back behaves oddly / playback fails on the old TV".
 
 ## When not to use
 
-- Understanding the wrapper's design: see [architecture](architecture.md).
+- Understanding the app's design: see [architecture](architecture.md).
 - Building or publishing an IPK: see [hbc-distribution-plan](hbc-distribution-plan.md) and the
   [release protocol](../protocols/release-protocol.md).
 
@@ -161,10 +172,12 @@ On-device test checklist for the target webOS 3.0 TV:
 - [ ] App launches from the home screen / launcher.
 - [ ] Server picker renders; U2/D-pad moves focus between field, checkbox and Connect.
 - [ ] LAN auto-discovery lists the server (bundled service runs).
-- [ ] Connect reaches `System/Info/Public` and `/web/manifest.json`.
-- [ ] jellyfin-web loads inside the iframe and is usable with the remote.
-- [ ] Playback starts and audio/video are correct.
-- [ ] Back (461) returns to the picker once, without a double action.
+- [ ] Connect reaches `System/Info/Public`.
+- [ ] Login view accepts credentials and reaches the Views screen.
+- [ ] D-pad moves focus **within the active view** (Up/Down only).
+- [ ] Back pops the in-app view stack **once**; a Back at the picker exits the app.
+- [ ] Posters load (image URLs carry `ApiKey`).
+- [ ] Playback starts, OK/Space pauses/resumes, Back stops and returns to the item detail.
 - [ ] `webOS.deviceInfo` resolves — the `Array.prototype.includes` `TypeError` is expected to be gone after `1.3.1` (check the console).
 
 ## Common mistakes
@@ -184,10 +197,17 @@ API.
 The empty array is only correct for apps that call no Luna API. This app calls Luna; the correct
 group set is an open decision.
 
-### Assuming the wrapper's ES5 style guarantees jellyfin-web renders
+### Assuming ES5-clean JavaScript guarantees playback
 
-The wrapper and jellyfin-web are separate codebases on separate release trains. The wrapper can be
-ES5-clean while jellyfin-web fails on Chromium 38.
+The app can be ES5-clean and still fail if the TV's `<video>` cannot decode the container or codec
+(the app direct-streams and performs **no** transcoding). Compatibility is about both syntax and
+codecs.
+
+### Treating the stored session token as audited
+
+`michelly_sessions` holds a real Jellyfin access token in `localStorage`. That is a known, deliberate
+trade-off — not a hardened design. See
+[architecture.md → Security debt (deferred)](architecture.md#security-debt-deferred).
 
 ### Fixing an upstream file silently
 

@@ -4,10 +4,10 @@ This is a **personal fork** of [`jellyfin/jellyfin-webos`](https://github.com/je
 imported verbatim at version **1.2.2** (upstream commit `ab4794046467cdb88212ccc29212300cf9112a43`).
 It is maintained for a personal **webOS 3.0** TV.
 
-It is a small wrapper around the web interface provided by the server
-(https://github.com/jellyfin/jellyfin-web) so most of the development happens there. The app shows a
-server picker, auto-discovers Jellyfin servers on the LAN through a bundled Luna service, and then
-hands off to the jellyfin-web UI hosted by the user's Jellyfin server inside an iframe.
+It is a **self-contained Jellyfin client**: it shows a server picker, auto-discovers Jellyfin servers
+on the LAN through a bundled Luna service, signs in to the Jellyfin REST API and renders its own
+library, item-detail and playback views. Media plays in the TV's native `<video>` element from a
+direct-stream URL — there is no iframe and no server-served jellyfin-web.
 
 - Documentation entry point: [`docs/project.md`](docs/project.md)
 - webOS 3.0 compatibility report: [`docs/context/webos-3-compatibility.md`](docs/context/webos-3-compatibility.md)
@@ -93,8 +93,10 @@ ares-package --no-minify services frontend
 
 ## Usage
 
-Fill in your hostname, port and scheme and click connect. The app checks for a server by grabbing the
-manifest and the public server info. Afterwards, the app hands off control to the hosted web UI.
+Fill in the last two parts of the server's LAN IP address and its port, then click **Connect**. The
+app verifies the server through `GET /System/Info/Public`. If there is no saved session for that
+server it asks you to sign in to Jellyfin (the password is never stored); afterwards it opens your
+libraries and you can browse and play with the remote.
 
 ## Testing
 

@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.5
+version: 1.6
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -31,8 +31,8 @@ Jellyfin *server* is GPL-2.0, but the webOS *client* is not.
 ### Licensing
 
 - The webOS client is licensed under **MPL-2.0**, with incorporated **Apache-2.0** parts.
-- MPL headers are present in `frontend/index.html`, `frontend/js/*.js`, `frontend/css/*.css` and
-  `services/service.js`.
+- MPL headers are present in `frontend/index.html`, `frontend/js/**/*.js` (including the fork-only
+  `frontend/js/app/*.js`), `frontend/css/*.css` and `services/service.js`.
 - `frontend/js/ajax.js` and `frontend/js/storage.js` additionally carry a
   "Copyright 2019 Simon J. Hogan — Apache-2.0" notice.
 - Upstream images came from `jellyfin-ux` under the same licence; the fork replaced them with a
@@ -87,6 +87,16 @@ Changes to upstream files made by this fork.
 | 13 | `frontend/js/index.js` | Fix the server-persistence defects: store the new entry through the keyed `lruStrategy` helper and use the correct `connected_servers` localStorage key (lines 297, 359–367, 392) | Upstream defect: `.unshift()` on a plain object threw, the wrong key `connected_server` was written with an undefined `servers` variable, and the id-changed/failure paths used the wrong key | Applied |
 | 14 | `frontend/js/index.js` | Remove the `storage.remove('connected_servers')` call from `handleFailure` | `#13` restored the correct `connected_servers` key, which activated upstream's intent: any single failed request wiped the whole saved-server LRU. `handleFailure` receives only `{error}` — it has no server identity in scope — and a failed connect is usually transient (server off, timeout), so forgetting every server is worse UX than keeping it; the app self-heals on the next successful connect | Applied |
 | 15 | `frontend/index.html`, `frontend/js/index.js`, `frontend/css/main.css` | Replace the free-text URL field (`baseurl`) with a fixed `192.168.` prefix plus `#octet3`/`#octet4`/`#port` inputs (defaults `0`/`0`/`8096`); Connect composes `http://192.168.<octet3>.<octet4>:<port>` and normalizes each part to its parsed integer form (a typed `010` connects to `.10`, never to the URL parser's octal `.8`); saved/discovered servers prefill the fields from their stored `baseurl`/`Address`; a server outside `192.168.x.x` — saved or discovered — keeps the defaults, does not auto-connect, and shows an error when its server-list Connect button is used (instead of connecting to a wrong host); a newly saved server stores the full hostname in `Address` instead of a truncated `192.168.` | Personal fork on a `192.168.x.x` LAN — the picker cannot mistype the scheme or host, and no private IP is hardcoded in the public repository. **Known limitation:** a legacy/different-host saved server cannot be represented by the picker (its fields fall back to `0`/`0`/`8096`). **Not tied to a version bump** — it landed after the `1.3.2` release and is not yet part of a published IPK | Applied |
+| 16 | `frontend/index.html` | Removed the hidden `#contentFrame` iframe; the picker markup is now `#pickerView` and new sibling views `#loginView`, `#browseView`, `#itemView`, `#playerView` (`<video id="playerVideo">`) were added; added `<link href="css/app.css">` and the script tags `js/app/platform.js`, `js/app/api.js`, `js/app/auth.js`, `js/app/ui.js`, `js/app/catalog.js`, `js/app/player.js` before `js/index.js` | The app is now a self-contained Jellyfin client — it renders its own views instead of hosting server-served jellyfin-web in a frame (see [architecture](architecture.md)) | Applied |
+| 17 | `frontend/js/index.js` | Removed `handoff()`, `getTextToInject()`, `loadUrl()`, `injectScriptText()`, `injectStyleText()`, `getManifest()`, `handleSuccessManifest()`, the `window` `message` listener and the `manifest` global; the connect flow now ends at `GET /System/Info/Public` + LRU persistence and calls `afterConnect()` (reuse the saved `michelly_sessions` session or show `#loginView`); `navigate()` now traverses only **visible** tabbable elements; added an in-app back-handler stack (Back 461 pops it once, else `webOS.platformBack()`); the two ES5 polyfills stay and the 3 `const` became `var` | Drop the iframe/handoff model in favour of the native client, and make Back/D-pad respect the active view | Applied |
+| 18 | `frontend/css/main.css` | Removed the `#contentFrame` rule and the invalid `flex-wrap: flex-direction` declarations | The iframe no longer exists; the invalid declarations were dead/cosmetic defects | Applied |
+| 19 | `frontend/js/webOS.js` | **DELETED** | The `NativeShell`/`AppHost` postMessage bridge only existed to serve the iframe; its device-info/exit duties moved to the fork-only `frontend/js/app/platform.js` | Applied |
+| 20 | `frontend/css/webOS.css` | **DELETED** | It was injected into the now-removed iframe | Applied |
+| 21 | `frontend/appinfo.json` | `appDescription` → `"MiChelly - a standalone Jellyfin client for webOS."` (version unchanged) | Describe what the app now is; the iframe-era description no longer applies | Applied |
+
+`frontend/js/app/*.js` (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) and
+`frontend/css/app.css` are **new, fork-only files** — they do **not** exist upstream and are therefore
+not divergences from an upstream file. `services/service.js` was **not** touched by this change.
 
 `tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
 same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is
@@ -98,7 +108,7 @@ Known follow-ups:
 | Follow-up | Why | Notes |
 | --- | --- | --- |
 | Resolve `requiredACG` | Packaging/submission warning | Open decision; `[]` is wrong because the app calls Luna. |
-| Fix upstream CSS defects | Cosmetic; `main.css:44–45` invalid `flex-wrap`, `:156` stray token | See below. |
+| Fix upstream CSS defects | Cosmetic; `main.css:180` stray token (`server_card_url`) | The invalid `flex-wrap` declarations were removed in the native-client rewrite (divergence #18); the stray token remains. |
 
 Resolved in `1.3.1` — see divergence log [#12](#divergence-log)/[#13](#divergence-log): the
 `Array.prototype.includes` polyfill and the upstream picker/LRU persistence bugs are now **applied**.

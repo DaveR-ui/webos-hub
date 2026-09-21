@@ -1,5 +1,5 @@
 {
-    "appDescription": "MiChelly - a webOS client that connects to a Jellyfin server and opens its web UI.",
+    "appDescription": "MiChelly - a standalone Jellyfin client for webOS.",
     "icon": "assets/icon-80.png",
     "main": "index.html",
     "bgImage": "assets/splash.png",

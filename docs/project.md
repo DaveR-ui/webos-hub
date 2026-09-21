@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Agent-facing entry point for MiChelly, the Jellyfin webOS client fork — stack, slices, commands, conventions, domain entities and the context index.
 tags: [entry-point, project, webos, jellyfin, fork, client]
-version: 2.5
+version: 2.6
 doc_language: english
 ---
 
@@ -19,16 +19,19 @@ This repository is **MiChelly**, a **standalone Jellyfin client for webOS**
 metadata and artwork). See [upstream-provenance](context/upstream-provenance.md) and
 [webos-3-compatibility](context/webos-3-compatibility.md).
 
-The app is a **thin native shell / wrapper**, not a media player and not an aggregator:
+The app is a **self-contained Jellyfin client** — it renders its own UI and plays media itself; it is
+not a wrapper around server-served jellyfin-web:
 
 1. `frontend/` shows a server picker and auto-discovers Jellyfin servers on the LAN via a bundled
    Luna service.
-2. On connect it reads `GET {baseurl}/System/Info/Public` and `GET {baseurl}/web/manifest.json`.
-3. It then hands off to the **jellyfin-web UI hosted by the user's Jellyfin server**, loaded in an
-   `<iframe>`, and injects the `NativeShell` bridge (`frontend/js/webOS.js`) into that frame.
+2. On connect it reads `GET {baseurl}/System/Info/Public`, then reuses a saved per-server session or
+   shows a login view, and talks to the **Jellyfin REST API directly** (ES5 `XMLHttpRequest`).
+3. It browses libraries and items, and plays media in a native `<video>` from a direct-stream URL —
+   transcoding is a non-goal.
 
-All browsing, library and playback UI is therefore server-served jellyfin-web. The wrapper owns only
-the picker, discovery, D-pad/Back handling and the bridge.
+The app owns the picker, discovery, auth/session, catalog browsing, playback, D-pad/Back handling and
+the device profile. Native-shell duties (device info, app identity, exit) live in
+`frontend/js/app/platform.js`.
 
 > This is a **standalone Jellyfin client**: it federates no other app, service or media server, and
 > none is planned.
@@ -37,29 +40,34 @@ the picker, discovery, D-pad/Back handling and the bridge.
 
 | Layer | Choice |
 | --- | --- |
-| Webview app | Vanilla ES5-style JavaScript, no framework, no build step (`frontend/index.html`, `frontend/js/`) |
-| Bridge | `frontend/js/webOS.js` — installs `window.NativeShell` inside the server-served jellyfin-web iframe |
+| Webview app | Vanilla ES5 JavaScript, no framework, no build step; a single-page app of views (`frontend/index.html`, `frontend/js/`) |
+| REST client / auth | `frontend/js/app/api.js` (ES5 XHR Jellyfin REST client, `Authorization: MediaBrowser …` header) + `frontend/js/app/auth.js` (per-server session in `michelly_sessions`) |
 | Bundled service | webOS Luna JS service `com.daverui.michelly.service` (`services/service.js`), Node `dgram` UDP discovery |
 | Packaging | `ares-package` via `npm run package` (devDependency `@webosose/ares-cli` ^2.4.0) |
 | Tooling | Node CommonJS scripts under `tools/` (`gen-repo.js`, `gen-manifest.js`, `sync-version.js`) |
 | Platform bundle | `frontend/webOSTVjs-1.2.11/` (`webOSTV.js`, `webOSTV-dev.js`, Apache-2.0) |
-| Storage | Browser `localStorage` (keys `_deviceId2`, `connected_servers`) |
+| Storage | Browser `localStorage` (keys `_deviceId2`, `connected_servers`, `michelly_sessions`) |
+| Styling | Hand-written CSS, flexbox only (no CSS grid), no preprocessor or build step (`frontend/css/`) |
 | Upstream | Imported from `jellyfin/jellyfin-webos` v1.2.2; rebranded in `1.3.0` (see [divergence log](context/upstream-provenance.md#divergence-log)) |
 | Distribution | Custom Homebrew Channel (HBC) repository — IPK plus manifest |
 | License | MPL-2.0, with incorporated Apache-2.0 parts |
 
-**Architecture pattern:** thin native shell + bundled non-elevated Luna discovery service. The
-webview owns the picker and the frame handoff; the bundled service owns the only path that needs raw
-sockets (UDP discovery).
+**Architecture pattern:** self-contained native client (app-shell views + ES5 REST client + native
+`<video>`) with a bundled non-elevated Luna discovery service. The webview owns the picker, auth,
+catalog and playback; the bundled service owns the only path that needs raw sockets (UDP discovery).
 
-**Secrets posture:** no credentials are ever committed. The wrapper stores only server URLs, a
-generated device id and an auto-connect flag on the TV. Sign-in happens inside jellyfin-web.
+**Secrets posture:** no credentials are ever committed. The app stores server URLs, a generated device
+id, an auto-connect flag and a per-server Jellyfin **access token** in `localStorage`
+(`michelly_sessions`) on the TV; the **password is never stored**. Storing the token is an accepted,
+deliberate trade-off for a LAN-only personal client — hardening (encryption, refresh, revocation UI,
+logout) is deferred. See the canonical
+[security-debt note](context/architecture.md#security-debt-deferred).
 
 ## Slices
 
 | Slice | Description | Keywords | Entry points | Primary agents |
 | --- | --- | --- | --- | --- |
-| `frontend` | The webOS webview shell: server picker, UDP auto-discovery subscription, iframe handoff to the server-served jellyfin-web, D-pad/Back handling, and the `NativeShell` bridge | webview, iframe, handoff, d-pad, nativeshell, discovery, jellyfin-web, postmessage | `frontend/`, `frontend/js/` | coder, tester, reviewer |
+| `frontend` | The self-contained webOS Jellyfin client: server picker, UDP auto-discovery subscription, ES5 Jellyfin REST client, per-server auth/session, catalog browsing, native `<video>` playback, D-pad/Back handling | webview, views, jellyfin-rest-api, es5, auth, session, playback, catalog, d-pad, discovery | `frontend/`, `frontend/js/`, `frontend/js/app/`, `frontend/css/app.css` | coder, tester, reviewer |
 | `service` | The bundled non-elevated Luna discovery service (`com.daverui.michelly.service`, UDP 7359 broadcast) | luna, service, discovery, udp, dgram, 7359, subscription | `services/` | coder, reviewer |
 | `packaging` | IPK build, version sync, manifest generation and HBC repository-document generation | ares-package, ipk, gen-manifest, gen-repo, sync-version, sha256, version bump | `package.json`, `tools/`, `frontend/appinfo.json` | coder, tester, documenter |
 | `compat` | webOS 3.0 / Chromium 38 compatibility work | webos-3, chromium-38, es5, polyfill, legacy, compatibility | `docs/context/webos-3-compatibility.md` | explorer, architect, documenter |
@@ -96,12 +104,17 @@ test suite (`npm test` is a stub).
 webos-hub/
 ├── frontend/                      # the web app (packaged as the app root)
 │   ├── appinfo.json               # id com.daverui.michelly, v1.3.2, type web, disableBackHistoryAPI true
-│   ├── index.html                 # loads webOSTV.js, webOSTV-dev.js, js/ajax.js, js/storage.js, js/index.js
-│   ├── js/index.js                # server picker, auto-discovery, iframe handoff
+│   ├── index.html                 # app shell: picker/login/browse/item/player views; loads webOSTV.js, webOSTV-dev.js, js/ajax.js, js/storage.js, js/app/*.js, js/index.js
+│   ├── js/index.js                # server picker, auto-discovery, connect flow, visible-only D-pad + in-app back stack
 │   ├── js/ajax.js                 # XMLHttpRequest wrapper
 │   ├── js/storage.js              # localStorage wrapper
-│   ├── js/webOS.js                # NativeShell adapter (the jellyfin-web <-> webOS bridge)
-│   ├── css/main.css, css/webOS.css
+│   ├── js/app/platform.js         # device/app identity, device profile, screen, exit
+│   ├── js/app/api.js              # ES5 XHR Jellyfin REST client (Authorization: MediaBrowser …)
+│   ├── js/app/auth.js             # per-server session store (michelly_sessions)
+│   ├── js/app/ui.js               # view switcher, back stack, state renderers
+│   ├── js/app/catalog.js          # Views -> items -> detail -> episodes, Resume, paging
+│   ├── js/app/player.js           # PlaybackInfo -> direct-stream <video>
+│   ├── css/main.css, css/app.css
 │   ├── assets/*.png               # banner-dark, icon-80, icon-130, icon-transparent80/130, splash
 │   ├── submission-icon.png, .project
 │   └── webOSTVjs-1.2.11/          # webOSTV.js + webOSTV-dev.js + LICENSE-2.0.txt
@@ -145,8 +158,10 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 - **`frontend/appinfo.json` caveats for webOS 3.0.** `disableBackHistoryAPI` is a post-3.0 property
   (ignored on 3.0) and `requiredACG` is absent. Both are open compatibility decisions — see
   [webos-3-compatibility](context/webos-3-compatibility.md).
-- **D-pad handling lives in the wrapper.** Up/Down (38/40) move focus linearly through tabbable
-  elements; Left/Right (37/39) are no-ops; Back (461) calls `webOS.platformBack()`.
+- **D-pad handling lives in the app.** Up/Down (38/40) move focus linearly through **visible**
+  tabbable elements (elements inside hidden views are skipped); Left/Right (37/39) are no-ops; Back
+  (461) pops one in-app back-stack handler, and only calls `webOS.platformBack()` when the stack is
+  empty.
 
 ## Domain Entities
 
@@ -154,9 +169,10 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 | --- | --- |
 | Jellyfin webOS client | The webOS web app `com.daverui.michelly` (`MiChelly`, `frontend/appinfo.json`), installed on the TV. |
 | Bundled service | The non-elevated Luna JS service `com.daverui.michelly.service` shipped inside the same IPK. |
-| jellyfin-web | The web UI served by the user's Jellyfin server; runs inside `#contentFrame`. |
-| `NativeShell` / `AppHost` | The bridge object installed into the iframe by `frontend/js/webOS.js`, implementing jellyfin-web's native-shell contract. |
-| `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, auto_connect, id, Name, hosturl}`. |
+| Jellyfin REST API | The server's HTTP API (`/System/Info/Public`, `/Users/AuthenticateByName`, `/Users/{id}/Views`, `/Items`, `/Videos/{id}/stream`, …) the app calls directly via `frontend/js/app/api.js`. |
+| `michelly_sessions` | The `localStorage` map of per-server auth sessions `{userId, accessToken, userName}`, keyed by server id. |
+| `window.Michelly` | The app's shared JS namespace (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) built by `frontend/js/app/*`. |
+| `connected_servers` | The `localStorage` LRU map (max 4) of servers: `{baseurl, Address, auto_connect, id, Name}`. |
 | `_deviceId2` | The generated device id, built jellyfin-web style from `navigator.userAgent` plus a timestamp. |
 | IPK | The architecture-independent package `build/com.daverui.michelly_1.3.2_all.ipk`. |
 | HBC repository | An HTTPS-served `{"packages":[...]}` document (conventionally `repo.json`) consumed by Homebrew Channel; this fork's is `https://daver-ui.github.io/webos-hub/repo.json`. |
@@ -164,8 +180,9 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 
 ## Context Index
 
-- [`context/architecture.md`](context/architecture.md) — webview shell, server picker and discovery,
-  iframe handoff, the `NativeShell` bridge and the bundled Luna service.
+- [`context/architecture.md`](context/architecture.md) — the app shell and views, the ES5 Jellyfin
+  REST client, auth/session (`michelly_sessions`), catalog browsing, native playback and the bundled
+  Luna service.
 - [`context/webos-3-compatibility.md`](context/webos-3-compatibility.md) — webOS 3.0 / Chromium 38
   compatibility report: what is safe, the concrete defects and the on-device test plan.
 - [`context/upstream-provenance.md`](context/upstream-provenance.md) — fork origin, licensing, the
@@ -187,3 +204,4 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
 | `"appinfo.json version is out of sync with package.json"` | [release-protocol.md](protocols/release-protocol.md) |
 | `"`ares-package` packs .git into the IPK"` | [release-protocol.md#common-mistakes](protocols/release-protocol.md#common-mistakes) |
 | `"A newly discovered server is not saved"` | [architecture.md#common-mistakes](context/architecture.md#common-mistakes) |
+| `"The app stores an access token on the TV — is that safe?"` | [architecture.md#security-debt-deferred](context/architecture.md#security-debt-deferred) |

@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-20
 status: active
-description: Architecture of the Jellyfin webOS client fork — the webview shell, server picker and LAN discovery, the iframe handoff, the NativeShell bridge and the bundled Luna service.
-tags: [architecture, webview, luna, iframe, handoff, discovery, nativeshell, postmessage, jellyfin]
-version: 1.5
+description: Architecture of the MiChelly Jellyfin webOS client — the app shell and views, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback, and the bundled Luna discovery service.
+tags: [architecture, webview, views, jellyfin-rest-api, es5, auth, session, playback, luna, discovery, d-pad, jellyfin]
+version: 2.0
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -11,93 +11,132 @@ related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 
 ## Problem
 
-A webOS web app cannot render Jellyfin by itself. jellyfin-web is **served by the user's Jellyfin
-server**, so the client must host it inside a frame, bridge it to the webOS platform (device info,
-exit, device profile), and let the user find and pick a server on the local network — while a webview
-cannot open raw sockets for UDP discovery.
+A webOS web app must render the Jellyfin UI and play its media itself. jellyfin-web is **not** shipped
+with this app, and a webview cannot open raw sockets for UDP discovery. The client therefore has to
+talk to the **Jellyfin REST API directly**, draw its own views, play media in the TV's own `<video>`
+element, and still let the user find and pick a server on the local network.
 
 ## Solution
 
-### Thin native shell
+### App shell and views
 
-`frontend/index.html` loads plain scripts in a fixed order — there is no framework and no build step:
+`frontend/index.html` is a single-page app made of sibling `<div class="view">` panes; exactly one
+carries the `active` class at a time. It loads plain scripts in a fixed order — no framework, no build
+step, no bundler:
 
 | File | Role |
 | --- | --- |
-| `frontend/index.html` | App shell: logo, server-picker form (fixed `192.168.` prefix + `#octet3`/`#octet4`/`#port`, `#auto_connect`), `#serverlist`, `#busy`, hidden `#contentFrame` iframe. |
-| `frontend/webOSTVjs-1.2.11/webOSTV.js` | webOS platform JS (device info, Luna bus, `platformBack`). |
+| `frontend/index.html` | App shell: five view panes — `#pickerView` (logo, `#octet3`/`#octet4`/`#port`, `#auto_connect`, `#serverlist`, `#busy`), `#loginView`, `#browseView`, `#itemView`, `#playerView` (`<video id="playerVideo">`). |
+| `frontend/webOSTVjs-1.2.11/webOSTV.js` | webOS platform JS (device info, app info, Luna bus, `platformBack`). |
 | `frontend/webOSTVjs-1.2.11/webOSTV-dev.js` | Developer-mode companion bundle. |
 | `frontend/js/ajax.js` | `XMLHttpRequest` wrapper (JSON parse, 5 s timeouts, abort/timeout/error callbacks). |
 | `frontend/js/storage.js` | `localStorage` JSON wrapper. |
-| `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow, iframe handoff, D-pad handling. |
-| `frontend/js/webOS.js` | The `NativeShell` adapter injected into the jellyfin-web iframe. |
-| `frontend/css/main.css`, `frontend/css/webOS.css` | Picker styling, and the styles injected into jellyfin-web. |
+| `frontend/js/app/platform.js` | Device/app identity, device profile, screen size and exit; owns `_deviceId2` and the `Authorization` header parts. **Fork-only.** |
+| `frontend/js/app/api.js` | ES5 XHR Jellyfin REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** |
+| `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** |
+| `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** |
+| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`. **Fork-only.** |
+| `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>`, play/pause, best-effort session reporting. **Fork-only.** |
+| `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow, main key/Back handling. |
+| `frontend/css/main.css` | Picker and shared control styling. |
+| `frontend/css/app.css` | Native view / catalog / player styling (flexbox only). **Fork-only.** |
 
-The app is a **wrapper**: it never renders library or playback UI itself.
+The `js/app/*` files each extend the shared `window.Michelly` namespace
+(`var Michelly = window.Michelly = window.Michelly || {};`); `index.js` wires the picker to them.
 
 ### Server picker and connect flow
 
-`Init()` (on `<body onload>`) reads `connected_servers` from `localStorage`, pre-fills the three picker
-fields (`#octet3`/`#octet4`/`#port`) and the auto-connect checkbox from the most recent server, and
-honours the auto-connect flag unless the page was reached via Back/Forward. The pre-fill only happens
-when the saved host is `192.168.x.x`; otherwise the fields keep their defaults (`0`/`0`/`8096`) and
-auto-connect is skipped, so a stale or different-host entry never fires a bogus request — and its
-server-list **Connect** button shows an error instead of connecting.
+`Init()` (on `<body onload>`) shows `#pickerView`, initialises the platform layer, then reads
+`connected_servers` from `localStorage`, pre-fills the three picker fields (`#octet3`/`#octet4`/`#port`)
+and the auto-connect checkbox from the most recent server, and honours the auto-connect flag unless the
+page was reached via Back/Forward. The pre-fill only happens when the saved host is `192.168.x.x`;
+otherwise the fields keep their defaults (`0`/`0`/`8096`) and auto-connect is skipped, so a stale or
+different-host entry never fires a bogus request — and its server-list **Connect** button shows an error
+instead of connecting.
 
 Connecting (`handleServerSelect`) validates the two octets (`0-255` each) and the port (`1-65535`) and
 composes `http://192.168.<octet3>.<octet4>:<port>` (scheme fixed to `http`). If any field is invalid,
-no request is issued and an error is shown. On success it then follows the unchanged chain:
+no request is issued and an error is shown. On success it follows:
 
-1. `GET {baseurl}/System/Info/Public` → server identity (`Id`, `ServerName`) and record in the LRU map.
-2. `GET {baseurl}/web/manifest.json` → `start_url` and `shortname`.
-3. `handoff(hosturl, bundle)`.
+1. `GET {baseurl}/System/Info/Public` → server identity (`Id`, `ServerName`) and record in the LRU map
+   (`lruStrategy`, capped at **4** servers).
+2. `afterConnect(baseurl, data)`:
+   - `Michelly.api.setBaseUrl(baseurl)`;
+   - if `michelly_sessions[server.Id]` holds an `accessToken`, reuse it (`setToken`) and open the views;
+   - otherwise show `#loginView`.
 
-The LRU map is capped at **4** servers (`lruStrategy`). The host URL is built from `start_url`
-(`"/web"` is added unless already present).
+There is **no** `/web/manifest.json` fetch and **no** `start_url`: the app no longer loads server-served
+jellyfin-web, so none of the old `handoff()` machinery remains.
 
-### Iframe handoff
+### Auth and per-server sessions
 
-`handoff()` hides the picker, points `#contentFrame` at the server's `start_url`, and on load
-injects into that frame:
+`frontend/js/app/auth.js` keeps one session per server in the `michelly_sessions` `localStorage` key,
+keyed by the server id, storing `{userId, accessToken, userName}`. The **password is never stored**.
+Sign-in posts `POST /Users/AuthenticateByName` with `{Username, Pw}`; on success the returned
+`AccessToken` and `User.Id` are persisted. Any browsing call that returns 401/403 fires the
+`Michelly.api.onUnauthorized` hook, which clears the saved session and returns to `#loginView`.
+`auth.logout(serverId)` exists but is not yet exposed in the UI — see the
+[deferred security note](#security-debt-deferred).
 
-- `window.AppInfo` — `{deviceId, deviceName, appName, appVersion}`
-- `window.DeviceInfo` — the result of `webOS.deviceInfo(...)`
-- the text of `frontend/js/webOS.js`, which installs `window.NativeShell`
-- the text of `frontend/css/webOS.css`
+`frontend/js/app/api.js` identifies the client on every request with the modern header
+(`X-Emby-Authorization` is the older, deprecated alias and is intentionally not used):
 
-`getTextToInject()` fetches those two assets over XHR and imitates promises (Promises are avoided
-deliberately — see the comments in `frontend/js/index.js` about older webOS).
+```
+Authorization: MediaBrowser Client="MiChelly", Device="LG Smart TV", DeviceId="<id>", Version="<app version>"[, Token="<access token>"]
+```
 
-### The `NativeShell` bridge
+### Jellyfin REST endpoints
 
-`frontend/js/webOS.js` defines `window.NativeShell.AppHost` and friends. It communicates with the
-wrapper only through `window.top.postMessage({type, data}, '*')`.
+| Endpoint | Method | Used for |
+| --- | --- | --- |
+| `/System/Info/Public` | GET | Server identity (`Id`, `ServerName`, `ProductName`) during connect and discovery. |
+| `/Users/AuthenticateByName` | POST | Sign-in; returns `AccessToken` + `User`. |
+| `/Users/Public` | GET | Public user list (exposed by the API layer; the UI signs in by name). |
+| `/Users/{userId}/Views` | GET | Top-level libraries. |
+| `/Items` | GET | Item listing (`ParentId`, paging, sort, image aspect). |
+| `/Users/{userId}/Items/{itemId}` | GET | Item detail. |
+| `/Shows/{seriesId}/Episodes` | GET | Series episodes. |
+| `/Users/{userId}/Items/Resume` | GET | Continue Watching. |
+| `/Items/{itemId}/PlaybackInfo` | POST | Direct-play/stream decision (device profile sent in the body). |
+| `/Videos/{itemId}/stream` | GET | Direct-stream media (opened by `<video>`). |
+| `/Sessions/Playing`, `/Sessions/Playing/Progress`, `/Sessions/Playing/Stopped` | POST | Best-effort playback reporting (errors swallowed). |
+| `/Items/{itemId}/Images/{type}` | GET | Posters and thumbnails. |
 
-| `AppHost` method | Behaviour |
-| --- | --- |
-| `init`, `appName`, `appVersion`, `deviceId`, `deviceName` | Return the value from `AppInfo` and post it to the wrapper. |
-| `exit` | Posts `AppHost.exit`; the wrapper then calls `webOS.platformBack()`. |
-| `getDefaultLayout` | Returns `'tv'`. |
-| `getDeviceProfile(profileBuilder)` | Builds a device profile from `DeviceInfo` (`dolbyAtmos`, `dolbyVision`, `hdr10`, MKV progressive off, SSA render on). |
-| `getSyncProfile(profileBuilder)` | Minimal profile (`enableMkvProgressive: false`). |
-| `supports(command)` | Matches against a fixed feature list (see below). |
-| `screen` | Returns `{width, height}` from `DeviceInfo`, or `null`. |
+An image or `<video>` element **cannot** send an `Authorization` header, so the token travels in the
+query string as both `ApiKey` (current) and `api_key` (legacy alias).
 
-Additional `NativeShell` methods: `selectServer`, `downloadFile`, `enableFullscreen`,
-`disableFullscreen`, `getPlugins` (returns `[]`), `openUrl`, `updateMediaSession`,
-`hideMediaSession`.
+### Catalog browsing
 
-The wrapper's `message` listener handles exactly two types:
+`frontend/js/app/catalog.js` drives the single `#browseView` and `#itemView`:
 
-| `type` | Wrapper behaviour |
-| --- | --- |
-| `selectServer` | Restart discovery, show the picker, clear and hide the iframe. |
-| `AppHost.exit` | `webOS.platformBack()`. |
+- `openViews(userId)` — `GET /Users/{userId}/Views` renders one card per library plus a **Continue
+  Watching** button.
+- `openItems(parentId, …)` — `GET /Items` with paging (`DEFAULT_LIMIT` 60) and Previous/Next buttons.
+- `openItem(itemId, …)` — `GET /Users/{userId}/Items/{itemId}` renders poster, overview, **Play**, and an
+  **Episodes** button when `Type === 'Series'`.
+- `openEpisodes(seriesId, …)` and `openResume(userId)` cover series episodes and Continue Watching.
 
-Declared `supports()` features: `exit`, `externallinkdisplay`, `htmlaudioautoplay`,
-`htmlvideoautoplay`, `imageanalysis`, `physicalvolumecontrol`, `displaylanguage`,
-`otherapppromotions`, `targetblank`, `screensaver`, `subtitleappearancesettings`,
-`subtitleburnsettings`, `chromecast`, `multiserver`.
+Every selectable card is a `<button class="card">` so the global D-pad selector in `index.js` can reach
+it. Each navigation resets the back stack and pushes **exactly one** handler that recreates its parent,
+so the stack stays bounded no matter how deep the user goes. Missing or failed images swap to a text
+fallback (`Michelly.ui.renderImage`).
+
+### Native playback
+
+`frontend/js/app/player.js`:
+
+1. `POST /Items/{id}/PlaybackInfo` with a direct-play device profile (`TranscodingProfiles: []`) —
+   **transcoding is a non-goal**.
+2. Picks the first media source that `SupportsDirectStream`/`SupportsDirectPlay` (falling back to the
+   first source) and sets `#playerVideo.src = api.streamUrl(itemId, source.Id, container)`.
+3. OK/Space toggle play/pause while `#playerView` is active; Back stops playback and returns to item
+   detail.
+4. Best-effort `POST /Sessions/Playing*` reporting starts on play, repeats every 15 s and stops on
+   stop/end. These pings run with `suppressAuth`, so a transient failure cannot log the user out
+   mid-playback.
+
+The `<video>` element plays natively: there is no transcode negotiation, no subtitle UI and no custom
+seek bar beyond the platform player's own controls.
 
 ### LAN auto-discovery (bundled Luna service)
 
@@ -123,7 +162,7 @@ The bundled **non-elevated** Luna JS service `com.daverui.michelly.service`
   to subscribers as `{results: {...}}`.
 - Tracks subscriptions by `uniqueToken` and cancels the interval when the last one is removed.
 
-The wrapper treats discovery results as hints only: `verifyThenAdd()` calls
+The app treats discovery results as hints only: `verifyThenAdd()` calls
 `GET {Address}/System/Info/Public` and accepts the server only when
 `ProductName == "Jellyfin Server"`.
 
@@ -133,24 +172,39 @@ The wrapper treats discovery results as hints only: `verifyThenAdd()` calls
 
 | Key | keyCode | Behaviour |
 | --- | --- | --- |
-| Up / Down | 38 / 40 | `navigate(∓1)` — move focus linearly through tabbable elements (`input, button, a, area, object, select, textarea, [contenteditable]`). |
-| Left / Right | 37 / 39 | No-ops in the wrapper. |
-| Back | 461 | `webOS.platformBack()`. |
+| Up / Down | 38 / 40 | `navigate(∓1)` — move focus linearly through **visible** tabbable elements only (`input, button, a, area, object, select, textarea, [contenteditable]`; elements inside hidden views are excluded). |
+| Left / Right | 37 / 39 | No-ops. |
+| Back | 461 | `backPressed()` — pop **one** in-app back-stack handler via `Michelly.ui.handleBack()`; only when the stack is empty call `webOS.platformBack()`. |
 
-OK (13) and Space (32) toggle the auto-connect checkbox via `handleCheckbox`.
+OK (13) and Space (32) toggle the auto-connect checkbox in the picker (`handleCheckbox`); while
+`#playerView` is active, `frontend/js/app/player.js` uses the same keys to toggle play/pause.
 
 ### Persistence
 
 | `localStorage` key | Contents |
 | --- | --- |
 | `_deviceId2` | Device id, generated jellyfin-web style: `btoa([navigator.userAgent, Date.now()].join('|'))` with `=` replaced by `1`. |
-| `connected_servers` | LRU map (max 4) of `{baseurl, auto_connect, id, Name, hosturl}` keyed by server id. |
+| `connected_servers` | LRU map (max 4) of `{baseurl, Address, auto_connect, id, Name}` keyed by server id. |
+| `michelly_sessions` | Per-server auth session `{userId, accessToken, userName}` keyed by server id. |
 
-The map is written only on a successful connect (`handleSuccessServerInfo` / `handleSuccessManifest`).
-A failed connect leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence log
+The LRU map is written only on a successful connect (`handleSuccessServerInfo`). A failed connect
+leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence log
 [#14](upstream-provenance.md#divergence-log)).
 
-No credentials are stored by the wrapper; sign-in happens inside jellyfin-web.
+### Security debt (deferred)
+
+The native client now stores a Jellyfin **access token** in `localStorage` (`michelly_sessions`) —
+credentials that the old iframe wrapper never persisted. This is an **accepted, deliberate** trade-off
+for a **LAN-only personal client**: the token is scoped to the user's own server and the password
+itself is never stored. Hardening is explicitly **deferred / out of scope** for now:
+
+- token encryption at rest;
+- token refresh / expiry handling;
+- a revocation UI and a user-facing **logout** affordance (`auth.logout()` exists but is unused).
+
+Do not treat any of the above as a current guarantee. Cross-referenced from the
+[project.md technology stack](../project.md#technology-stack) and
+[webos-3-compatibility](webos-3-compatibility.md#security-debt-deferred).
 
 ### Luna endpoints reached
 
@@ -179,7 +233,8 @@ an empty array would be wrong. The correct group set is unresolved — see
 
 ## When to use
 
-- Reading path: any question about how the picker, discovery, the iframe handoff or the bridge work.
+- Reading path: any question about how the picker, discovery, REST client, auth/session, catalog or
+  playback work.
 - Changing path: editing `frontend/js/` requires a divergence entry (see
   [upstream-provenance](upstream-provenance.md)) plus a rebuild.
 
@@ -193,7 +248,7 @@ an empty array would be wrong. The correct group set is unresolved — see
 
 ## Examples
 
-Connecting to a server (the wrapper's own flow, from `frontend/js/index.js`):
+Connecting to a server (the picker's own flow, from `frontend/js/index.js`):
 
 ```js
 ajax.request(normalizeUrl(baseurl + '/System/Info/Public'), {
@@ -205,19 +260,29 @@ ajax.request(normalizeUrl(baseurl + '/System/Info/Public'), {
 });
 ```
 
-Implementing a `NativeShell` call inside jellyfin-web, and answering it in the wrapper:
+Calling the REST API with the client identity header (from `frontend/js/app/api.js`):
 
 ```js
-// injected into the iframe by js/webOS.js
-window.NativeShell = { selectServer: function () { postMessage('selectServer'); } /* … */ };
+var settings = {
+    method: 'GET',
+    headers: {
+        'Accept': 'application/json',
+        'Authorization': 'MediaBrowser Client="MiChelly", Device="LG Smart TV", ' +
+            'DeviceId="' + parts.deviceId + '", Version="' + parts.version + '"'
+    }
+};
+return ajax.request(baseUrl + '/Users/' + userId + '/Views', settings);
+```
 
-// handled by the wrapper's window 'message' listener
-case 'selectServer':
-    startDiscovery();
-    document.querySelector('.container').style.display = '';
-    contentFrame.style.display = 'none';
-    contentFrame.src = '';
-    break;
+Starting native playback (from `frontend/js/app/player.js`):
+
+```js
+api().getPlaybackInfo(item.Id, userId, function (data) {
+    var source = pickMediaSource(data);
+    var v = document.querySelector('#playerVideo');
+    v.src = api().streamUrl(item.Id, source.Id, source.Container || item.Container || '');
+    v.play();
+});
 ```
 
 ## Common mistakes
@@ -226,12 +291,20 @@ case 'selectServer':
 
 `frontend/js/*.js`, `frontend/css/*.css`, `frontend/index.html` and `services/service.js` come from
 upstream. Any edit must be logged in [upstream-provenance](upstream-provenance.md#divergence-log),
-otherwise the next upstream merge silently conflicts.
+otherwise the next upstream merge silently conflicts. The `frontend/js/app/*` files and
+`frontend/css/app.css` are new **fork-only** files, not upstream.
 
-### Expecting the wrapper to render Jellyfin UI itself
+### Expecting `/web/manifest.json` to be read
 
-The wrapper contains no library or player code. If the iframe is blank, the server's jellyfin-web did
-not load — check the server URL and `/web/manifest.json`, not the wrapper's CSS.
+The app no longer fetches `{baseurl}/web/manifest.json` (`start_url` / `shortname`) and never loads
+server-served jellyfin-web. If a library or poster is blank, the failure is in the REST API call or the
+token, not in a missing manifest.
+
+### Looking for the old `NativeShell` bridge
+
+`frontend/js/webOS.js`, `window.NativeShell` / `AppHost` and the `window.postMessage` handoff to an
+iframe no longer exist. The equivalent functionality (device info, device profile, exit) lives in
+`frontend/js/app/platform.js`, which runs **in the app itself**.
 
 ### A newly discovered server is not persisted
 
@@ -253,8 +326,8 @@ helper (max **4**, keyed by server id) and every write/remove uses the `connecte
 
 ### Assuming Left/Right moves focus
 
-In the wrapper, 37/39 are intentional no-ops. Only Up/Down traverse the tab order. (Inside
-jellyfin-web, jellyfin-web owns its own focus handling.)
+37/39 are intentional no-ops. Only Up/Down traverse the tab order, and only across elements in the
+**visible** view. (jellyfin-web's own focus handling is no longer involved.)
 
 ### Assuming `data.start_url.includes(...)` is safe on old engines
 
