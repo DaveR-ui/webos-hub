@@ -571,3 +571,99 @@
     width: auto;
     margin-top: 1.5rem;
 }
+
+/* Default-user settings (built dynamically in index.js) */
+
+#openSettings {
+    width: auto;
+    min-width: 16rem;
+    margin-top: 1rem;
+}
+
+#settingsView {
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 1.5rem 2rem;
+}
+
+.settings-card {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-align-items: stretch;
+    align-items: stretch;
+    width: 70%;
+    max-width: 40rem;
+    padding: 1.6rem 2rem 2rem 2rem;
+    background: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.9rem;
+    box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.45);
+}
+
+.settings-title {
+    margin: 0 0 0.6rem 0;
+    font-size: 1.5em;
+    color: #F3EFFA;
+    text-align: center;
+}
+
+.settings-intro,
+.settings-hint {
+    margin: 0 0 0.8rem 0;
+    font-size: 0.6em;
+    line-height: 1.4;
+    color: #A99FC4;
+}
+
+.settings-hint {
+    margin-top: 1rem;
+    margin-bottom: 0;
+}
+
+.settings-card label {
+    margin-top: 0.4rem;
+    font-size: 0.65em;
+    color: #D9D0EC;
+}
+
+.settings-card input {
+    width: 100%;
+    margin: 0.3rem 0 0.6rem 0;
+}
+
+.settings-card button {
+    width: 100%;
+    margin: 0.35rem 0;
+}
+
+.settings-card .settings-primary {
+    background: #C9A6FF;
+    border-color: #C9A6FF;
+    color: #1A0F33;
+}
+
+.settings-card .settings-primary:focus {
+    background: #DCC5FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+#settingsStatus {
+    margin: 0.6rem 0 0 0;
+    padding: 0.35em 0.6em;
+    color: #C9A6FF;
+    background-color: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.4rem;
+    font-size: 0.6em;
+    word-wrap: break-word;
+}

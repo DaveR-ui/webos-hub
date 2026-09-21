@@ -2,8 +2,8 @@
 last_updated: 2026-09-21
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
-tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.9
+tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence, thin-loader]
+version: 2.2
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -100,16 +100,35 @@ Changes to upstream files made by this fork.
 | 26 | `frontend/assets/banner-dark.png`, `frontend/assets/splash.png` | Regenerated both binaries with ImageMagick: brand gradient `#2A1A4A`→`#0B0616`, `#150B2B` monogram badge with a `#3A2E5C` border, amber `#F2B03D` "MC" + accent bar and cream `#F5EFE6` "MiChelly" wordmark (banner 1920×640, splash 1920×1080). The Jellyfin-blue is not reused and the rendered subtitle now reads **"webOS media client"** — the upstream text is gone | Complete the de-brand of the shipped picker banner and launch splash: the rebrand (#11) replaced the icon/submission artwork, but these two binaries kept the upstream wordmark until this pass | Applied |
 | 27 | `package.json` | `version` `1.3.2` → `1.3.3` (aligned with `frontend/appinfo.json`) and `description` → `"MiChelly - a standalone media client for webOS"` (de-branded) | Restore a single source of truth for the version — the Build workflow (#28) now fails on any `package.json` / `frontend/appinfo.json` drift — and finish de-branding the package metadata | Applied |
 | 28 | `.github/workflows/build.yml` | Build workflow now publishes to `gh-pages`: trigger is `push` on `master` + `workflow_dispatch` (plus the existing `release: published`), workflow-level `permissions: contents: write`, a `Verify version consistency` gate, a `Generate repository document` step (`npm run repo`), and a `Publish to gh-pages` step (native git + the default `GITHUB_TOKEN`; runs on `push`/`workflow_dispatch` only) | Automate the HBC repository publish instead of copying `repo.json` and the IPK by hand — see [hbc-distribution-plan](hbc-distribution-plan.md) | Applied |
+| 29 | `frontend/index.html` | Added the `<script src="js/app/audio.js">` tag and the sibling `#audioView` view pane (`<audio id="playerAudio">`) | Audio playback in the self-contained client — `js/app/audio.js` is a new fork-only file, so only this upstream shell file diverges (see [architecture](architecture.md#native-playback)) | Applied |
+| 30 | `frontend/index.html` | Shell rewired for the thin loader: removed the 8 app script tags + `js/index.js` from the static shell (the files stay on disk as the packaged fallback), added `id="appCss"` to the `css/app.css` link, replaced `<body onload="Init();">` with a plain `<body>`, and appended `js/lib/sha256.js` + `js/loader.js` as the last elements before `</body>` | Let the fork-only `frontend/js/loader.js` drive boot and inject either the verified remote bundle or the packaged copies — see [architecture](architecture.md#thin-loader--remote-bundle) | Applied |
+| 31 | `package.json` | Added `"bundle": "node tools/gen-bundle.js"` to `scripts` (version unchanged) | Generate the remote app bundle + manifest deterministically — see [architecture](architecture.md#thin-loader--remote-bundle) | Applied |
+| 32 | `.github/workflows/build.yml` | Added a `Generate remote app bundle` step (`npm run bundle`) and extended the publish step to copy `build/app/**` → `gh-pages/app/` alongside `repo.json` + `ipk/` | Publish the thin-loader payload so code/UI updates go live without an IPK reinstall — see [hbc-distribution-plan](hbc-distribution-plan.md#remote-app-bundle-app) | Applied |
+| 33 | `frontend/js/index.js` | `afterConnect()` is now **session-first, then default-user auto-login**: it reuses a valid saved `accessToken`, else makes exactly one auto-login attempt with the configured default user, and on any error clears session + token and falls back to `#loginView` with a notice; auto-connect now goes through the new `autoConnectSavedServer(server)` using the **stored `baseurl` as-is** (scheme and port preserved) so it no longer depends on a `192.168.x.x` host (the manual picker is unchanged); a **runtime-built** default-user settings view (`#settingsView` + `#openSettings`, plus a `#openSettings` button on the picker) is added in JS without touching `index.html`; a guarded single-discovered-server auto-select (nothing saved, no user interaction, exactly one `ProductName === "Jellyfin Server"`) | Skip the login screen and the manual server step on a personal LAN TV; the shell (`index.html`) stays untouched so the whole change ships in the 9-file payload with no IPK rebuild | Applied |
 
-`frontend/js/app/*.js` (`platform`, `api`, `auth`, `ui`, `catalog`, `player`) and
+`frontend/js/app/*.js` (`platform`, `api`, `auth`, `ui`, `catalog`, `player`, `audio`) and
 `frontend/css/app.css` are **new, fork-only files** — they do **not** exist upstream and are therefore
-not divergences from an upstream file. `frontend/css/app.css` was re-styled, and the comments in
-`frontend/js/app/api.js` and `frontend/js/app/platform.js` were de-branded alongside this turn's
-restyle; because none of these files is an upstream file, that work needs **no divergence row**.
+not divergences from an upstream file. This includes the audio work: `frontend/js/app/audio.js` (the
+audio player), `frontend/js/app/api.js` (new `audioStreamUrl` → `/Audio/{itemId}/stream?static=true`),
+`frontend/js/app/catalog.js` (`Type === 'Audio'` routing of the item-detail Play button) and the
+`#audioView` styles in `frontend/css/app.css`. `frontend/css/app.css` was re-styled, and the comments
+in `frontend/js/app/api.js` and `frontend/js/app/platform.js` were de-branded alongside this turn's
+restyle; because none of these files is an upstream file, that work needs **no divergence row** —
+only the `frontend/index.html` shell change above ([#29](#divergence-log)) is a divergence.
+The **default-user auto-login** work is likewise fork-only: the `michelly_default_user` store and its
+`getDefaultUser`/`setDefaultUser`/`disableDefaultUser`/`resetDefaultUser` helpers live in
+`frontend/js/app/auth.js`, and the settings-view styling lives in `frontend/css/app.css` — neither file
+exists upstream, so only the `frontend/js/index.js` change ([#33](#divergence-log)) is a divergence.
+`frontend/js/loader.js` (the ES5 thin loader) and `frontend/js/lib/sha256.js` (dependency-free
+synchronous SHA-256) are likewise **new, fork-only files**; the boot
+mechanism they implement is fork-only work, so only the `frontend/index.html` rewiring
+([#30](#divergence-log)), the `package.json` `bundle` script ([#31](#divergence-log)) and the Build
+workflow change ([#32](#divergence-log)) are divergences.
 `services/service.js` was **not** touched by this change.
 
-`tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
-same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is
+`tools/gen-repo.js` and `tools/gen-bundle.js` are **new, fork-only files** (not upstream files), added
+under `tools/` for the same reason; `gen-repo.js`'s `ICON_PATH` is
+`icons/michelly.png` to match the rebrand. The `docs/` tree is
 fork-local and not tracked as a divergence. The rebrand landed in version `1.3.0` and **did** modify
 upstream files — every such change is listed in the divergence log above.
 
@@ -139,6 +158,10 @@ longer collides with the official `org.jellyfin.webos` webosbrew entry — that 
 
 The pre-fork repository is preserved on branch **`backup/pre-jellyfin-fork`** (commit `efc4b31`) for
 history; it is not part of the current app.
+
+Out of scope (assessment only, **not implemented**): pixel streaming in the webOS client — the
+pragmatic path for PC game streaming on this TV is an external Moonlight + Sunshine setup, not
+in-app work.
 
 ## When to use
 

@@ -17,6 +17,10 @@ if (!Array.prototype.includes) {
 var curr_req = false;
 var server_info = false;
 
+// Set on the first user key press or click so auto-selection of a lone discovered
+// server never fights the user for the picker.
+var user_interacted = false;
+
 //Adds .includes to string to do substring matching
 if (!String.prototype.includes) {
   String.prototype.includes = function(search, start) {
@@ -99,6 +103,7 @@ function backPressed() {
 
 document.onkeydown = function (evt) {
     evt = evt || window.event;
+    user_interacted = true;
     switch (evt.keyCode) {
         case 37:
             leftArrowPressed();
@@ -116,6 +121,10 @@ document.onkeydown = function (evt) {
             backPressed();
             break;
     }
+};
+
+document.onclick = function () {
+    user_interacted = true;
 };
 
 function handleCheckbox(elem, evt) {
@@ -150,6 +159,8 @@ function navigationInit() {
 
 function Init() {
     Michelly.ui.showView('pickerView');
+    ensureSettingsAffordance();
+    ensureSettingsView();
 
     Michelly.platform.init(function () {
         navigationInit();
@@ -165,9 +176,11 @@ function Init() {
             if (window.performance && window.performance.navigation.type == window.performance.navigation.TYPE_BACK_FORWARD) {
                 console.log('Got here using the browser "Back" or "Forward" button, inhibiting auto connect.');
             } else {
-                if (prefilled && first_server.auto_connect) {
+                if (first_server.auto_connect) {
+                    // Connect to the address exactly as stored (scheme and port included),
+                    // not through the 192.168.x.x picker fields.
                     console.log("Auto connecting...");
-                    handleServerSelect();
+                    autoConnectSavedServer(first_server);
                 }
             }
             renderServerList(connected_servers);
@@ -322,6 +335,24 @@ function getServerInfo(baseurl, auto_connect) {
     });
 }
 
+// Auto-connect path for a saved or freshly discovered server: uses the address
+// exactly as given (scheme and port included) rather than the picker's 192.168.x.x fields.
+function autoConnectSavedServer(server) {
+    if (!server || !server.baseurl) {
+        return;
+    }
+
+    displayConnecting();
+    hideError();
+
+    if (curr_req) {
+        console.log("There is an active request.");
+        abort();
+    }
+
+    getServerInfo(server.baseurl, true);
+}
+
 function getConnectedServers() {
     connected_servers = storage.get('connected_servers');
     if (!connected_servers) {
@@ -425,10 +456,33 @@ function afterConnect(baseurl, data) {
         Michelly.api.setToken(session.accessToken);
         hideConnecting();
         Michelly.catalog.openViews(session.userId);
-    } else {
+        return;
+    }
+
+    var def = Michelly.auth.getDefaultUser();
+
+    if (!def) {
         hideConnecting();
         showLogin();
+        return;
     }
+
+    // Exactly one automatic attempt: on any failure fall through to the login screen.
+    Michelly.ui.setBusy('Signing in as ' + def.username + '...');
+
+    Michelly.auth.login(current_server_id, def.username, def.password, function (err, newSession) {
+        if (err) {
+            Michelly.auth.clearSession(current_server_id);
+            Michelly.api.clearToken();
+            hideConnecting();
+            showLogin('Could not sign in as ' + def.username + ': ' + Michelly.ui.describeError(err));
+            return;
+        }
+
+        Michelly.api.setToken(newSession.accessToken);
+        hideConnecting();
+        Michelly.catalog.openViews(newSession.userId);
+    });
 }
 
 function setLoginBusy(busy) {
@@ -440,7 +494,7 @@ function setLoginBusy(busy) {
     button.textContent = busy ? 'Signing in...' : 'Login';
 }
 
-function showLogin() {
+function showLogin(notice) {
     var username = document.querySelector('#loginUsername');
     var password = document.querySelector('#loginPassword');
 
@@ -453,6 +507,12 @@ function showLogin() {
     }
 
     Michelly.ui.setError('', '#loginError');
+
+    // Set the reason after the clear so it survives (e.g. a failed automatic sign-in).
+    if (notice) {
+        Michelly.ui.setError(notice, '#loginError');
+    }
+
     setLoginBusy(false);
     Michelly.ui.showView('loginView');
 
@@ -505,6 +565,169 @@ Michelly.api.onUnauthorized(function () {
     Michelly.api.clearToken();
     showLogin();
 });
+
+/* Default-user settings (view + affordance built in JS; index.html is untouched) */
+
+function setSettingsStatus(msg) {
+    var status = document.querySelector('#settingsStatus');
+
+    if (!status) {
+        return;
+    }
+
+    status.textContent = msg || '';
+    status.style.display = msg ? '' : 'none';
+}
+
+// Idempotently add the focusable entry point to the picker; the D-pad finds it
+// through the existing visible-tabbable DOM scan.
+function ensureSettingsAffordance() {
+    if (document.querySelector('#openSettings')) {
+        return;
+    }
+
+    var container = document.querySelector('#pickerView .container');
+
+    if (!container) {
+        return;
+    }
+
+    var button = document.createElement('button');
+    button.id = 'openSettings';
+    button.type = 'button';
+    button.textContent = 'Default user...';
+    button.onclick = function () {
+        openSettings();
+        return false;
+    };
+
+    container.appendChild(button);
+}
+
+// Idempotently build #settingsView and append it to <body> so the existing
+// Michelly.ui.showView('settingsView') view switcher picks it up.
+function ensureSettingsView() {
+    if (document.querySelector('#settingsView')) {
+        return;
+    }
+
+    var view = document.createElement('div');
+    view.id = 'settingsView';
+    view.className = 'view';
+
+    var card = document.createElement('div');
+    card.className = 'settings-card';
+    view.appendChild(card);
+
+    card.appendChild(Michelly.ui.el('h1', 'settings-title', 'Default user'));
+    card.appendChild(Michelly.ui.el('p', 'settings-intro', 'The app signs in automatically with this account. Leave the password empty if the account has none.'));
+
+    var usernameLabel = Michelly.ui.el('label', null, 'Username');
+    usernameLabel.htmlFor = 'defaultUsername';
+    card.appendChild(usernameLabel);
+
+    var username = document.createElement('input');
+    username.type = 'text';
+    username.id = 'defaultUsername';
+    card.appendChild(username);
+
+    var passwordLabel = Michelly.ui.el('label', null, 'Password');
+    passwordLabel.htmlFor = 'defaultPassword';
+    card.appendChild(passwordLabel);
+
+    var password = document.createElement('input');
+    password.type = 'password';
+    password.id = 'defaultPassword';
+    card.appendChild(password);
+
+    var status = Michelly.ui.el('p', 'settings-status', '');
+    status.id = 'settingsStatus';
+    status.style.display = 'none';
+    card.appendChild(status);
+
+    var save = Michelly.ui.el('button', 'settings-primary', 'Save');
+    save.id = 'settingsSave';
+    save.type = 'button';
+    save.onclick = function () {
+        saveDefaultUser();
+        return false;
+    };
+    card.appendChild(save);
+
+    var turnOff = Michelly.ui.el('button', 'settings-secondary', 'Turn off automatic sign-in');
+    turnOff.id = 'settingsDisable';
+    turnOff.type = 'button';
+    turnOff.onclick = function () {
+        Michelly.auth.disableDefaultUser();
+        setSettingsStatus('Automatic sign-in is off. The login screen will be shown.');
+        return false;
+    };
+    card.appendChild(turnOff);
+
+    var restore = Michelly.ui.el('button', 'settings-secondary', 'Restore built-in default (pepe)');
+    restore.id = 'settingsRestore';
+    restore.type = 'button';
+    restore.onclick = function () {
+        Michelly.auth.resetDefaultUser();
+        var user = Michelly.auth.getDefaultUser();
+        document.querySelector('#defaultUsername').value = user ? user.username : '';
+        document.querySelector('#defaultPassword').value = user ? user.password : '';
+        setSettingsStatus('Restored the built-in default (pepe).');
+        return false;
+    };
+    card.appendChild(restore);
+
+    var back = Michelly.ui.el('button', 'settings-secondary', 'Back');
+    back.id = 'settingsBack';
+    back.type = 'button';
+    back.onclick = function () {
+        // Pop the back entry pushed by openSettings() so hardware Back does not
+        // need a second press to leave the app.
+        if (!Michelly.ui.handleBack()) {
+            Michelly.ui.showView('pickerView');
+        }
+        return false;
+    };
+    card.appendChild(back);
+
+    card.appendChild(Michelly.ui.el('p', 'settings-hint', 'Automatic sign-in also needs a server: to skip both screens, tick "Automatically connect on app launch" on the previous screen.'));
+
+    document.body.appendChild(view);
+}
+
+function saveDefaultUser() {
+    var username = document.querySelector('#defaultUsername').value;
+    var password = document.querySelector('#defaultPassword').value;
+
+    if (!username) {
+        setSettingsStatus('Please enter a username.');
+        return false;
+    }
+
+    Michelly.auth.setDefaultUser(username, password);
+    setSettingsStatus('Saved. The app will sign in as ' + username + '.');
+    return false;
+}
+
+function openSettings() {
+    var user = Michelly.auth.getDefaultUser();
+    var username = document.querySelector('#defaultUsername');
+    var password = document.querySelector('#defaultPassword');
+
+    // built-in -> pepe/pepe, custom -> current, disabled -> empty
+    if (username) { username.value = user ? user.username : ''; }
+    if (password) { password.value = user ? user.password : ''; }
+
+    setSettingsStatus('');
+
+    // Single bounded back entry: Back returns to the picker.
+    Michelly.ui.clearBackHandlers();
+    Michelly.ui.pushBackHandler(function () {
+        Michelly.ui.showView('pickerView');
+    });
+
+    Michelly.ui.showView('settingsView');
+}
 
 /* Server auto-discovery */
 
@@ -559,6 +782,40 @@ function renderSingleServer(server_id, server) {
 
 var servers_verifying = {};
 
+// Single identity check: only a Jellyfin media server counts.
+function isJellyfinServer(data) {
+    return !!(data && data.ProductName === 'Jellyfin Server');
+}
+
+// Auto-select a lone discovered server only when there is nothing saved, the user has
+// not touched the UI, and exactly one Jellyfin server has been verified. Otherwise the
+// picker stays authoritative and we do nothing.
+function maybeAutoSelectDiscoveredServer() {
+    if (user_interacted || hasSavedServers()) {
+        return;
+    }
+
+    var ids = Object.keys(discovered_servers);
+
+    if (ids.length !== 1) {
+        return;
+    }
+
+    var only = discovered_servers[ids[0]];
+
+    if (!isJellyfinServer(only.system_info_public)) {
+        return;
+    }
+
+    console.log("Auto connecting to the only discovered server...");
+    // Discovered Address carries its own scheme/port, so bypass the picker fields.
+    autoConnectSavedServer({ baseurl: only.Address });
+}
+
+function hasSavedServers() {
+    return Object.keys(getConnectedServers()).length > 0;
+}
+
 function verifyThenAdd(server) {
     if (servers_verifying[server.Id]) {
         return;
@@ -572,12 +829,12 @@ function verifyThenAdd(server) {
             console.log(server);
             console.log(data);
 
-            // TODO: Do we want to autodiscover only media servers, or anything that responds to "who is JellyfinServer?"
-            if (data.ProductName == "Jellyfin Server") {
+            if (isJellyfinServer(data)) {
                 server.system_info_public = data;
                 if (!discovered_servers[server.Id]) {
                     discovered_servers[server.Id] = server;
                     renderServerList(discovered_servers);
+                    maybeAutoSelectDiscoveredServer();
                 }
             }
             servers_verifying[server.Id] = true;

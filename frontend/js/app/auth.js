@@ -10,9 +10,19 @@ var Michelly = window.Michelly = window.Michelly || {};
 (function (namespace) {
     'use strict';
 
-    // Fork-owned session store, keyed by server id. Never stores a password.
-    // { "<serverId>": { userId, accessToken, userName } }
+    // Fork-owned stores. michelly_sessions is keyed by server id and never contains a
+    // password; michelly_default_user may hold a plaintext default credential for automatic
+    // sign-in (or { disabled: true } to turn that off) -- plaintext on purpose, no fake
+    // obfuscation.
+    // michelly_sessions: { "<serverId>": { userId, accessToken, userName } }
     var SESSIONS_KEY = 'michelly_sessions';
+
+    // Tri-state default credential:
+    //   key absent             -> built-in default (pepe/pepe), auto-login on
+    //   { username, password } -> the user's own account
+    //   { disabled: true }     -> auto-login off (the login screen is shown)
+    var DEFAULT_USER_KEY = 'michelly_default_user';
+    var BUILTIN_DEFAULT_USER = { username: 'pepe', password: 'pepe' };
 
     function readAll() {
         var sessions = storage.get(SESSIONS_KEY);
@@ -85,12 +95,81 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
+    // Normalized read: null when absent/malformed (=> built-in), { disabled: true },
+    // or a fresh { username, password } copy. Never a live reference to the stored object.
+    function readDefaultUser() {
+        var stored;
+
+        try {
+            stored = storage.get(DEFAULT_USER_KEY);
+        } catch (err) {
+            // Malformed JSON counts as absence -> built-in default.
+            return null;
+        }
+
+        if (!stored || typeof stored !== 'object') {
+            return null;
+        }
+
+        if (stored.disabled === true) {
+            return { disabled: true };
+        }
+
+        if (typeof stored.username !== 'string' || typeof stored.password !== 'string') {
+            return null;
+        }
+
+        return { username: stored.username, password: stored.password };
+    }
+
+    // Fresh { username, password } for automatic sign-in, or null when it is turned off.
+    function getDefaultUser() {
+        var stored = readDefaultUser();
+
+        if (!stored) {
+            return { username: BUILTIN_DEFAULT_USER.username, password: BUILTIN_DEFAULT_USER.password };
+        }
+
+        if (stored.disabled) {
+            return null;
+        }
+
+        return { username: stored.username, password: stored.password };
+    }
+
+    // Requires a non-empty username; an empty password is allowed.
+    function setDefaultUser(username, password) {
+        if (typeof username !== 'string' || username === '') {
+            return null;
+        }
+
+        var user = {
+            username: username,
+            password: typeof password === 'string' ? password : ''
+        };
+
+        storage.set(DEFAULT_USER_KEY, user);
+        return user;
+    }
+
+    function disableDefaultUser() {
+        storage.set(DEFAULT_USER_KEY, { disabled: true });
+    }
+
+    function resetDefaultUser() {
+        storage.remove(DEFAULT_USER_KEY);
+    }
+
     namespace.auth = {
         getSession: getSession,
         saveSession: saveSession,
         clearSession: clearSession,
         hasSession: hasSession,
         logout: logout,
-        login: login
+        login: login,
+        getDefaultUser: getDefaultUser,
+        setDefaultUser: setDefaultUser,
+        disableDefaultUser: disableDefaultUser,
+        resetDefaultUser: resetDefaultUser
     };
 })(Michelly);

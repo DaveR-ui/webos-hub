@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-21
 status: active
-description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app, the concrete defects, the deferred security debt and the on-device test needed to close the question.
-tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, array-includes, disablebackhistoryapi, requiredacg, security-debt]
-version: 2.1
+description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
+tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt]
+version: 2.4
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -44,6 +44,7 @@ The concrete target is **Chromium 38**.
 | Arrow functions, `let`, template literals, classes, destructuring/spread, `async`/`await`, `fetch`, `Promise` | **None** in the app's own JS — `frontend/js/index.js`, `frontend/js/ajax.js`, `frontend/js/storage.js` and every `frontend/js/app/*.js` file are ES5-only. The vendored `webOSTVjs-1.2.11/` bundle is a pre-built upstream artifact; its one problematic call (`Array.prototype.includes`) is polyfilled below. |
 | `const` | The 3 pre-existing declarations in `frontend/js/index.js` are now `var`; the app's own JS no longer uses `const` anywhere. |
 | `Object.assign`, `Array.from` / `Array.prototype.find`, `Element.closest`, `classList` | Not used in the shipped frontend; `index.js` implements its own index lookup instead of `Array.from(...).findIndex(...)`. |
+| `fetch`, `Promise`, `crypto.subtle`, ESM, Service Worker | Not used anywhere — the thin loader hashes with a synchronous pure-JS SHA-256 and fetches with `XMLHttpRequest` (see [Thin loader on Chromium 38](#thin-loader-on-chromium-38)). |
 | `String.prototype.includes` | Polyfilled at the top of `frontend/js/index.js` (String polyfill lines 21–31; the `Array.prototype.includes` polyfill is at lines 9–15). Covers the `String.prototype.includes` use inside `webOSTV.js`. |
 | `Array.prototype.includes` | **Polyfilled at the top of `frontend/js/index.js`** (ES5, installed before the `webOS.deviceInfo(...)` call). Covers the `webOSTV.js` `getSystemInfo` `missingConfigs` path. |
 | CSS | `frontend/css/app.css` and `frontend/css/main.css` are **flexbox-only** with `-webkit-` prefixes. **No CSS grid** (Chrome 57+) is used anywhere. |
@@ -100,17 +101,75 @@ What must run on Chromium 38 is the app itself, and it does so with a small, fix
 - `XMLHttpRequest` (via `frontend/js/ajax.js`) — not `fetch`;
 - DOM building with `document.createElement` / `textContent` (no innerHTML templating in the app
   views);
-- `<video>` with a direct `/Videos/{id}/stream` source;
+- `<video>` with a direct `/Videos/{id}/stream` source, and `<audio>` with a direct
+  `/Audio/{id}/stream` source;
+- the thin loader: synchronous pure-JS SHA-256, `XMLHttpRequest` `arraybuffer` fetches and inline
+  classic-script injection (no `crypto.subtle`, no `fetch`, no Service Worker);
 - flexbox layouts with `-webkit-` prefixes.
 
-The residual risk is therefore **codec/container and `<video>` playback behaviour on the TV**, not
-JavaScript syntax or a third-party UI framework. That can only be confirmed on the device.
+The residual risk is therefore **codec/container and `<video>`/`<audio>` playback behaviour on the
+TV**, not JavaScript syntax or a third-party UI framework. That can only be confirmed on the device.
+
+### Thin loader on Chromium 38
+
+The thin loader (`frontend/js/loader.js` + `frontend/js/lib/sha256.js`, see
+[architecture](architecture.md#thin-loader--remote-bundle)) is written for the same engine floor as the
+rest of the app:
+
+| Concern | Choice | Why |
+| --- | --- | --- |
+| Hashing | Pure-JS **synchronous** SHA-256 | `crypto.subtle` is asynchronous, **secure-context-only** and unreliable on the packaged app's `file://`/null origin under Chromium 38. A few-hundred-KB bundle hashes fast enough synchronously. |
+| Transport | `XMLHttpRequest` with `responseType = 'arraybuffer'` | No `fetch` (Chrome 42+), no Promises. |
+| Cross-origin fetch | XHR straight to GitHub Pages from the packaged app's **null origin** | GitHub Pages sends `Access-Control-Allow-Origin: *`; the loader depends on that CORS header, since a `file://` page has no usable origin. |
+| Text decode | `TextDecoder` **feature-detected**, with a manual `Uint8Array` → `String.fromCharCode` chunk fallback | `TextDecoder` is present in Chromium 38 but is guarded so an absent/limited implementation cannot break the boot. |
+| Activation | Inline **classic** `<script>.textContent` + one `<style>` | No `fetch`/ESM/`import`/Service Worker on Chromium 38; a classic inline script is the injection mechanism that is guaranteed to work. |
+| Boot guard | `window.onerror` + one `sessionStorage`-flagged reload | Best-effort rollback to the packaged copies without a Promise chain. |
+| Bundle generation | `tools/gen-bundle.js` (`npm run bundle`), Node, CI-side | Runs off-device; ships no new engine requirement to the TV. |
+
+The remote payload is decoded and executed as **text in the app's own origin**, so the boot path is
+still the packaged `XMLHttpRequest` + DOM path — no new engine features are needed on the TV.
+
+**On-device checklist (thin loader):**
+
+- [ ] Launch **with network access** → console logs `[michelly-shell] bundle remote <version> active`,
+      or `window.MichellyShell.bundleSource === 'remote'`.
+- [ ] Launch **offline** (or with the Pages host unreachable) → the console logs the fallback and the
+      app still works from the packaged copies (`window.MichellyShell.bundleSource === 'packaged'`).
+- [ ] A **bad hash / invalid manifest** falls back to the packaged build instead of running bytes that
+      failed verification (temporarily publish a wrong `sha256` and confirm the packaged app boots).
+
+### Audio codec reality on Chromium 38
+
+The audio player direct-streams (no transcode), so an audio item plays only if the **TV's own
+Chromium 38 `<audio>` decoder** supports its codec:
+
+| Codec / container | Chromium 38 `<audio>` | Notes |
+| --- | --- | --- |
+| MP3 | **Safe** | Universally supported. |
+| WAV (PCM) | **Safe** | Uncompressed — large over the LAN. |
+| Ogg Vorbis | **Safe** | |
+| AAC / M4A | Conditional | Depends on the TV's licensed codecs; not guaranteed. |
+| FLAC | **Unsupported** | Native `<audio>` FLAC landed in Chrome 56; a flac item will fail to play. |
+
+An unsupported codec no longer fails silently: both players surface `MEDIA_ERR_SRC_NOT_SUPPORTED`
+(`error.code === 4`) as a codec-aware message in `#itemError` (e.g. `This item's audio codec (FLAC) is
+not supported by the TV, or the stream could not be loaded.`) — code 4 also covers a failed stream
+request (401/404/5xx), so the wording does not over-assert the codec. The on-device check below records
+the failure instead of showing a blank screen. The audio stream URL's `audioCodec` fallback now resolves
+the first audio stream via `MediaStream.Type === 'Audio'` (the REST API serialises the enum as a string;
+the old `=== 0` test never matched).
+
+The server-side `DirectPlayProfiles` should be narrowed to the safe codecs so the server does not
+offer unplayable sources — that is **deferred** (A5, pending device logs) and is **not** part of this
+change. The same applies to the reported **video black-screen** defect, which is likewise **deferred /
+pending device logs** and must not be assumed fixed.
 
 ### Security debt (deferred)
 
 The native client stores a real **access token** in `localStorage` (`michelly_sessions`) instead of
-storing no credentials, as the old iframe wrapper did. This is an **accepted, deliberate** trade-off
-for a **LAN-only personal client**; the password is never stored. Token encryption/refresh, a
+storing no credentials, as the old iframe wrapper did. It may also persist a **plaintext default
+credential** in `michelly_default_user` for automatic sign-in. Both are an **accepted, deliberate**
+trade-off for a **LAN-only personal client**. Token encryption/refresh, credential hardening, a
 revocation UI and a logout affordance are explicitly **deferred / non-goal** — the canonical note and
 the full list live in
 [architecture.md → Security debt (deferred)](architecture.md#security-debt-deferred).
@@ -135,7 +194,7 @@ Concrete, fixable items:
 1. ~~Missing `Array.prototype.includes` polyfill (the real defect).~~ **FIXED in `1.3.1`** — polyfilled at the top of `frontend/js/index.js`.
 2. `disableBackHistoryAPI` ignored on 3.0 (possible double Back handling).
 3. Missing `requiredACG` (open decision, not `[]`).
-4. The app's own rendering and native `<video>` playback on Chromium 38 cannot be verified from the repository.
+4. The app's own rendering and native `<video>`/`<audio>` playback on Chromium 38 cannot be verified from the repository; the reported **video black-screen** and the `DirectPlayProfiles` narrowing (A5) remain **deferred / pending device logs**.
 5. Deferred security debt (session token in `localStorage`) — see the canonical note in [architecture](architecture.md#security-debt-deferred).
 
 The only way to close the question is an **on-device test on the actual webOS 3.0 TV**.
@@ -169,6 +228,13 @@ if (!Array.prototype.includes) {
 
 On-device test checklist for the target webOS 3.0 TV:
 
+> **Deployment prerequisite.** The video control overlay (`frontend/js/app/player.js`) and the audio
+> player (`frontend/js/app/audio.js`) are **payload** files. They reach the TV only after
+> `npm run bundle` + a publish (video overlay), and the audio work is **uncommitted** today — a TV on
+> the published `1.3.3` IPK has **no audio player at all** and shows the overlay only once the bundle
+> is regenerated and published. Verify the deployed bundle version (`window.MichellyShell`) before
+> judging any item below.
+
 - [ ] App launches from the home screen / launcher.
 - [ ] Server picker renders; U2/D-pad moves focus between field, checkbox and Connect.
 - [ ] LAN auto-discovery lists the server (bundled service runs).
@@ -177,8 +243,23 @@ On-device test checklist for the target webOS 3.0 TV:
 - [ ] D-pad moves focus **within the active view** (Up/Down only).
 - [ ] Back pops the in-app view stack **once**; a Back at the picker exits the app.
 - [ ] Posters load (image URLs carry `ApiKey`).
+- [ ] Video playback shows the on-screen controls (`#playerControls`): Play/Pause button, `m:ss / m:ss`
+      readout and progress bar — **always visible** while `#playerView` is active (no auto-hide).
+- [ ] D-pad Up/Down reaches `#playerToggle` (focus ring visible); OK/Space toggles playback **exactly
+      once** (the button's own `onkeydown` toggles and suppresses the synthetic click; it must not
+      double-toggle to a no-op, and must work even if the remote's OK produces no click); Back stops and
+      returns to the item detail.
 - [ ] Playback starts, OK/Space pauses/resumes, Back stops and returns to the item detail.
+- [ ] Audio item **Play** opens `#audioView` and shows the now-playing card (poster/title/artist/album).
+- [ ] Audio playback starts for an MP3/WAV/Ogg item; OK/Space toggles play/pause, Back stops and returns to item detail.
+- [ ] A FLAC item is expected to **fail** on Chromium 38 (native `<audio>` FLAC is Chrome 56+) — record the error text.
+- [ ] An unsupported codec surfaces a **codec-aware** message in `#itemError` (e.g.
+      `This item's audio codec (FLAC) is not supported by the TV, or the stream could not be loaded.`
+      for audio, or the video equivalent on `MEDIA_ERR_SRC_NOT_SUPPORTED`) instead of failing silently
+      or leaving a blank screen.
 - [ ] `webOS.deviceInfo` resolves — the `Array.prototype.includes` `TypeError` is expected to be gone after `1.3.1` (check the console).
+- [ ] Thin loader: online / offline / bad-hash checks — see the dedicated checklist in
+      [Thin loader on Chromium 38](#thin-loader-on-chromium-38).
 
 ## Common mistakes
 
@@ -208,6 +289,10 @@ codecs.
 `michelly_sessions` holds a real access token in `localStorage`. That is a known, deliberate
 trade-off — not a hardened design. See
 [architecture.md → Security debt (deferred)](architecture.md#security-debt-deferred).
+
+### Assuming `crypto.subtle` or `fetch` can verify the remote bundle
+
+Neither is safe on Chromium 38: `crypto.subtle` is asynchronous and secure-context-only (the packaged app runs from `file://`/null origin), and `fetch` is Chrome 42+. The loader therefore hashes with synchronous pure-JS SHA-256 and downloads with `XMLHttpRequest`. Do not "modernize" it back to the WebCrypto/`fetch` APIs.
 
 ### Fixing an upstream file silently
 

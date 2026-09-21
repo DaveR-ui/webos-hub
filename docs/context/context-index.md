@@ -2,8 +2,8 @@
 last_updated: 2026-09-21
 status: active
 description: Hub for the docs/context folder of the webOS media client fork — what belongs here, every file it holds, and what lives elsewhere.
-tags: [hub, context, index]
-version: 1.3
+tags: [hub, context, index, thin-loader, remote-bundle]
+version: 1.5
 related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -29,14 +29,15 @@ touches source.
 
 ### Contents
 
-- [architecture.md](architecture.md) — the app shell and views, the ES5 media-server REST client,
-  auth/session, catalog browsing, native playback and the bundled Luna discovery service.
+- [architecture.md](architecture.md) — the app shell and views, the thin loader and remote bundle, the
+  ES5 media-server REST client, auth/session (incl. the tri-state default-user auto-login), catalog
+  browsing, native playback and the bundled Luna discovery service.
 - [webos-3-compatibility.md](webos-3-compatibility.md) — webOS 3.0 / Chromium 38 compatibility report:
   what is safe, the concrete defects and the on-device test plan.
 - [upstream-provenance.md](upstream-provenance.md) — fork origin, licensing, the verbatim-import
   policy, upstream sync and the divergence log.
 - [hbc-distribution-plan.md](hbc-distribution-plan.md) — approved custom Homebrew Channel repository
-  distribution plan.
+  distribution plan and the remote app bundle under `app/`.
 - [README.md](README.md) — compatibility pointer; the operating agent system resolves this path as
   the folder index.
 - [context-index.md](context-index.md) — this hub.

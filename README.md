@@ -6,8 +6,9 @@ It is maintained for a personal **webOS 3.0** TV.
 
 It is a **self-contained media client**: it shows a server picker, auto-discovers media servers
 on the LAN through a bundled Luna service, signs in to the media-server REST API and renders its own
-library, item-detail and playback views. Media plays in the TV's native `<video>` element from a
-direct-stream URL — there is no iframe and no server-served web client.
+library, item-detail and playback views. Video plays in the TV's native `<video>` element and audio in
+its native `<audio>` element, each from a direct-stream URL — there is no iframe and no server-served
+web client.
 
 - Documentation entry point: [`docs/project.md`](docs/project.md)
 - webOS 3.0 compatibility report: [`docs/context/webos-3-compatibility.md`](docs/context/webos-3-compatibility.md)
@@ -76,10 +77,17 @@ Version handling: bump `version` in `package.json`, then run `npm run version` t
 `frontend/appinfo.json`. The Build workflow fails the run if the two versions disagree.
 
 Publishing is automated: pushing to `master` (or running the **Build** workflow via
-`workflow_dispatch`) packages the app, regenerates `repo.json` with `npm run repo`, and pushes
-`repo.json` plus the IPK to the `gh-pages` branch served by GitHub Pages. A local `npm run package` /
-`npm run repo` is only for pre-flight inspection — see
-[`docs/protocols/release-protocol.md`](docs/protocols/release-protocol.md).
+`workflow_dispatch`) packages the app, regenerates `repo.json` with `npm run repo`, builds the remote
+app bundle with `npm run bundle`, and pushes `repo.json`, the IPK and `app/` to the `gh-pages` branch
+served by GitHub Pages. A local `npm run package` / `npm run repo` / `npm run bundle` is only for
+pre-flight inspection — see [`docs/protocols/release-protocol.md`](docs/protocols/release-protocol.md).
+
+Code/UI updates deploy through the **thin loader**: the IPK ships a stable shell and, on launch, the
+app fetches `app/manifest.json` from GitHub Pages, verifies each file's size and sha256, and injects
+the verified bundle — so changes to the app views, REST client and styles go live on the TV's **next
+launch** with no Homebrew Channel reinstall. The packaged copies are the fallback, and the **IPK
+itself (the shell, service and version) still needs the manual HBC refresh**. See
+[`docs/context/architecture.md`](docs/context/architecture.md#thin-loader--remote-bundle).
 
 ### Full WebOS SDK Installation
 
@@ -101,8 +109,11 @@ ares-package --no-minify services frontend
 
 Fill in the last two parts of the server's LAN IP address and its port, then click **Connect**. The
 app verifies the server through `GET /System/Info/Public`. If there is no saved session for that
-server it asks you to sign in (the password is never stored); afterwards it opens your
-libraries and you can browse and play with the remote.
+server it signs in automatically with the configurable **default user** (built-in `pepe`/`pepe` until
+changed) and only shows the login screen when automatic sign-in is off or fails; afterwards it opens
+your libraries and you can browse and play with the remote. The default user is set through the
+picker's **Default user...** screen; its password is stored in plaintext on the TV — an accepted
+trade-off for a personal LAN client, see `docs/context/architecture.md#security-debt-deferred`.
 
 ## Testing
 

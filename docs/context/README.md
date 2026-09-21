@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 status: active
 description: Compatibility pointer — the canonical hub for docs/context is context-index.md.
 tags: [pointer, context, hub]
-version: 1.0
+version: 1.1
 ---
 
 # Context Docs

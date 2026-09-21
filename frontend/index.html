@@ -9,22 +9,14 @@
 	<meta charset="UTF-8" />
 	<title>MiChelly</title>
 	<link rel="stylesheet" href="css/main.css" type="text/css"/>
-	<link rel="stylesheet" href="css/app.css" type="text/css"/>
+	<link rel="stylesheet" href="css/app.css" type="text/css" id="appCss"/>
 	<script src="webOSTVjs-1.2.11/webOSTV.js" charset="utf-8"></script>
 	<script src="webOSTVjs-1.2.11/webOSTV-dev.js" charset="utf-8"></script>
 	<script src="js/ajax.js" charset="utf-8"></script>
 	<script src="js/storage.js" charset="utf-8"></script>
-	<script src="js/app/platform.js" charset="utf-8"></script>
-	<script src="js/app/api.js" charset="utf-8"></script>
-	<script src="js/app/auth.js" charset="utf-8"></script>
-	<script src="js/app/ui.js" charset="utf-8"></script>
-	<script src="js/app/catalog.js" charset="utf-8"></script>
-	<script src="js/app/player.js" charset="utf-8"></script>
-	<script src="js/app/audio.js" charset="utf-8"></script>
-	<script src="js/index.js"></script>
 </head>
 
-<body onload="Init();">
+<body>
 	<div id="pickerView" class="view active">
 		<div class="container">
 			<div id="logo">
@@ -84,6 +76,9 @@
 	<div id="audioView" class="view">
 		<audio id="playerAudio"></audio>
 	</div>
+
+	<script src="js/lib/sha256.js" charset="utf-8"></script>
+	<script src="js/loader.js" charset="utf-8"></script>
 </body>
 
 </html>

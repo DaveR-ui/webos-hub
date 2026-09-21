@@ -49,6 +49,9 @@ jobs:
       - name: Generate repository document
         run: npm run repo
 
+      - name: Generate remote app bundle
+        run: npm run bundle
+
       - name: Upload CI artifacts
         uses: actions/upload-artifact@v5
         with:
@@ -82,6 +85,11 @@ jobs:
           rm -f "$WORKTREE"/ipk/*.ipk
           cp build/repo.json "$WORKTREE/repo.json"
           cp "$IPK" "$WORKTREE/ipk/"
+
+          rm -rf "$WORKTREE/app"
+          mkdir -p "$WORKTREE/app"
+          cp -R build/app/. "$WORKTREE/app/"
+
           touch "$WORKTREE/.nojekyll"
 
           git -C "$WORKTREE" add -A
