@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence]
-version: 1.4
+version: 1.5
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -86,6 +86,7 @@ Changes to upstream files made by this fork.
 | 12 | `frontend/js/index.js` | Add an ES5 `Array.prototype.includes` polyfill at the top of the file | webOS 3.0 / Chromium 38 compatibility: `webOSTV.js` uses `Array.prototype.includes` (Chrome 47+) in the `getSystemInfo` `missingConfigs` path, which throws on Chromium 38 and leaves `deviceInfo` undefined | Applied |
 | 13 | `frontend/js/index.js` | Fix the server-persistence defects: store the new entry through the keyed `lruStrategy` helper and use the correct `connected_servers` localStorage key (lines 297, 359–367, 392) | Upstream defect: `.unshift()` on a plain object threw, the wrong key `connected_server` was written with an undefined `servers` variable, and the id-changed/failure paths used the wrong key | Applied |
 | 14 | `frontend/js/index.js` | Remove the `storage.remove('connected_servers')` call from `handleFailure` | `#13` restored the correct `connected_servers` key, which activated upstream's intent: any single failed request wiped the whole saved-server LRU. `handleFailure` receives only `{error}` — it has no server identity in scope — and a failed connect is usually transient (server off, timeout), so forgetting every server is worse UX than keeping it; the app self-heals on the next successful connect | Applied |
+| 15 | `frontend/index.html`, `frontend/js/index.js`, `frontend/css/main.css` | Replace the free-text URL field (`baseurl`) with a fixed `192.168.` prefix plus `#octet3`/`#octet4`/`#port` inputs (defaults `0`/`0`/`8096`); Connect composes `http://192.168.<octet3>.<octet4>:<port>`; saved/discovered servers prefill the fields from their stored `baseurl`/`Address`; a saved server outside `192.168.x.x` keeps the defaults and does not auto-connect; a newly saved server stores the full hostname in `Address` instead of a truncated `192.168.` | Personal fork on a `192.168.x.x` LAN — the picker cannot mistype the scheme or host, and no private IP is hardcoded in the public repository. **Known limitation:** a legacy/different-host saved server cannot be represented by the picker (its fields fall back to `0`/`0`/`8096`). **Not tied to a version bump** — it landed after the `1.3.2` release and is not yet part of a published IPK | Applied |
 
 `tools/gen-repo.js` is a **new, fork-only file** (not an upstream file), added under `tools/` for the
 same reason; its `ICON_PATH` is now `icons/michelly.png` to match the rebrand. The `docs/` tree is

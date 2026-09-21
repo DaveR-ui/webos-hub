@@ -176,12 +176,15 @@ function Init() {
     if (storage.exists('connected_servers')) {
         connected_servers = storage.get('connected_servers')
         var first_server = connected_servers[Object.keys(connected_servers)[0]]
-        document.querySelector('#baseurl').value = first_server.baseurl;
+        var prefilled = setPickerFromServerUrl(first_server.baseurl);
+        if (!prefilled) {
+            console.warn('Saved server "' + first_server.baseurl + '" is not on 192.168.x.x; keeping the default server fields.');
+        }
         document.querySelector('#auto_connect').checked = first_server.auto_connect;
         if (window.performance && window.performance.navigation.type == window.performance.navigation.TYPE_BACK_FORWARD) {
             console.log('Got here using the browser "Back" or "Forward" button, inhibiting auto connect.');
         } else {
-            if (first_server.auto_connect) {
+            if (prefilled && first_server.auto_connect) {
                 console.log("Auto connecting...");
                 handleServerSelect();
             }
@@ -215,11 +218,82 @@ function normalizeUrl(url) {
     return parts.join("://");
 }
 
+// Personal fork: the picker only ever targets a 192.168.x.x LAN host.
+var SERVER_IP_PREFIX = '192.168.';
+var SERVER_DEFAULT_OCTET3 = '0';
+var SERVER_DEFAULT_OCTET4 = '0';
+var SERVER_DEFAULT_PORT = '8096';
+
+function isValidOctet(value) {
+    if (!/^\d{1,3}$/.test(value)) {
+        return false;
+    }
+    var num = parseInt(value, 10);
+    return num >= 0 && num <= 255;
+}
+
+function isValidPort(value) {
+    if (!/^\d{1,5}$/.test(value)) {
+        return false;
+    }
+    var num = parseInt(value, 10);
+    return num >= 1 && num <= 65535;
+}
+
+// Reads the three picker fields, treats an empty field as its default, validates
+// all three and composes the http:// URL. Returns null when anything is invalid.
+function readPickerUrl() {
+    var octet3 = document.querySelector('#octet3').value.trim();
+    var octet4 = document.querySelector('#octet4').value.trim();
+    var port = document.querySelector('#port').value.trim();
+
+    if (octet3 === '') { octet3 = SERVER_DEFAULT_OCTET3; }
+    if (octet4 === '') { octet4 = SERVER_DEFAULT_OCTET4; }
+    if (port === '') { port = SERVER_DEFAULT_PORT; }
+
+    if (!isValidOctet(octet3) || !isValidOctet(octet4) || !isValidPort(port)) {
+        return null;
+    }
+
+    var composed = 'http://' + SERVER_IP_PREFIX + octet3 + '.' + octet4 + ':' + port;
+    if (!validURL(composed)) {
+        return null;
+    }
+    return composed;
+}
+
+// Parses a stored server URL and pre-fills the three picker fields. Accepts an
+// optional scheme and an optional port; returns false and changes nothing when
+// the host is not 192.168.x.x or anything fails validation.
+function setPickerFromServerUrl(url) {
+    if (!url) {
+        return false;
+    }
+
+    var match = String(url).match(/(?:^|\/\/)192\.168\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?(?:\/|$)/i);
+    if (!match) {
+        return false;
+    }
+
+    var octet3 = match[1];
+    var octet4 = match[2];
+    var port = match[3] || SERVER_DEFAULT_PORT;
+
+    if (!isValidOctet(octet3) || !isValidOctet(octet4) || !isValidPort(port)) {
+        return false;
+    }
+
+    document.querySelector('#octet3').value = String(parseInt(octet3, 10));
+    document.querySelector('#octet4').value = String(parseInt(octet4, 10));
+    document.querySelector('#port').value = String(parseInt(port, 10));
+    return true;
+}
+
 function handleServerSelect() {
-    var baseurl = normalizeUrl(document.querySelector('#baseurl').value);
+    var baseurl = readPickerUrl();
     var auto_connect = document.querySelector('#auto_connect').checked;
 
-    if (validURL(baseurl)) {
+    if (baseurl !== null) {
 
         displayConnecting();
         console.log(baseurl, auto_connect);
@@ -232,7 +306,7 @@ function handleServerSelect() {
         getServerInfo(baseurl, auto_connect);
     } else {
         console.log(baseurl);
-        displayError("Please enter a valid URL, it needs a scheme (http:// or https://), a hostname or IP (ex. jellyfin.local or 192.168.0.2) and a port (ex. :8096 or :8920).");
+        displayError("Please enter a valid server address: the last two parts of the IP address (0-255 each) and a port (1-65535).");
     }
 }
 
@@ -371,7 +445,7 @@ function handleSuccessManifest(data, baseurl) {
         'baseurl': baseurl,
         'hosturl': hosturl,
         'Name': data.shortname,
-        'Address': new URL(baseurl).hostname.slice(0,8),
+        'Address': new URL(baseurl).hostname,
         'id': new_server_id,
         'auto_connect': false
     })
@@ -581,10 +655,8 @@ function renderSingleServer(server_id, server) {
     var btn = document.createElement("button");
     btn.innerText = "Connect";
     btn.type = "button";
-    btn.value = server.Address;
     btn.onclick = function () {
-        var urlfield = document.getElementById("baseurl");
-        urlfield.value = this.value;
+        setPickerFromServerUrl(server.baseurl || server.Address);
         handleServerSelect();
     };
     server_card.appendChild(btn);

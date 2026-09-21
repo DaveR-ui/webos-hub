@@ -3,7 +3,7 @@ last_updated: 2026-09-20
 status: active
 description: Architecture of the Jellyfin webOS client fork — the webview shell, server picker and LAN discovery, the iframe handoff, the NativeShell bridge and the bundled Luna service.
 tags: [architecture, webview, luna, iframe, handoff, discovery, nativeshell, postmessage, jellyfin]
-version: 1.4
+version: 1.5
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -24,7 +24,7 @@ cannot open raw sockets for UDP discovery.
 
 | File | Role |
 | --- | --- |
-| `frontend/index.html` | App shell: logo, server-picker form (`#baseurl`, `#auto_connect`), `#serverlist`, `#busy`, hidden `#contentFrame` iframe. |
+| `frontend/index.html` | App shell: logo, server-picker form (fixed `192.168.` prefix + `#octet3`/`#octet4`/`#port`, `#auto_connect`), `#serverlist`, `#busy`, hidden `#contentFrame` iframe. |
 | `frontend/webOSTVjs-1.2.11/webOSTV.js` | webOS platform JS (device info, Luna bus, `platformBack`). |
 | `frontend/webOSTVjs-1.2.11/webOSTV-dev.js` | Developer-mode companion bundle. |
 | `frontend/js/ajax.js` | `XMLHttpRequest` wrapper (JSON parse, 5 s timeouts, abort/timeout/error callbacks). |
@@ -37,11 +37,15 @@ The app is a **wrapper**: it never renders library or playback UI itself.
 
 ### Server picker and connect flow
 
-`Init()` (on `<body onload>`) reads `connected_servers` from `localStorage`, pre-fills the URL field
-and auto-connect checkbox from the most recent server, and honours the auto-connect flag unless the
-page was reached via Back/Forward.
+`Init()` (on `<body onload>`) reads `connected_servers` from `localStorage`, pre-fills the three picker
+fields (`#octet3`/`#octet4`/`#port`) and the auto-connect checkbox from the most recent server, and
+honours the auto-connect flag unless the page was reached via Back/Forward. The pre-fill only happens
+when the saved host is `192.168.x.x`; otherwise the fields keep their defaults (`0`/`0`/`8096`) and
+auto-connect is skipped, so a stale or different-host entry never fires a bogus request.
 
-Connecting (`handleServerSelect`) normalizes the URL, then:
+Connecting (`handleServerSelect`) validates the two octets (`0-255` each) and the port (`1-65535`) and
+composes `http://192.168.<octet3>.<octet4>:<port>` (scheme fixed to `http`). If any field is invalid,
+no request is issued and an error is shown. On success it then follows the unchanged chain:
 
 1. `GET {baseurl}/System/Info/Public` → server identity (`Id`, `ServerName`) and record in the LRU map.
 2. `GET {baseurl}/web/manifest.json` → `start_url` and `shortname`.

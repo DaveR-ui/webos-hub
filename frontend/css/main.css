@@ -137,6 +137,38 @@ input[type=checkbox]:focus {
     outline: 2px solid #00A4DC;
 }
 
+#serverurl {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+            align-items: center;
+}
+
+#serverurl .url-prefix,
+#serverurl .url-sep {
+    -webkit-flex: 0 0 auto;
+            flex: 0 0 auto;
+}
+
+#serverurl .url-octet,
+#serverurl .url-port {
+    width: auto;
+    min-width: 0;
+    text-align: center;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+}
+
+#serverurl .url-octet {
+    -webkit-flex: 1 1 0;
+            flex: 1 1 0;
+}
+
+#serverurl .url-port {
+    -webkit-flex: 1.5 1 0;
+            flex: 1.5 1 0;
+}
+
 #serverlist {
     display: -webkit-box;
     display: flex;
