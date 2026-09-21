@@ -27,8 +27,8 @@ var Michelly = window.Michelly = window.Michelly || {};
         return namespace.api;
     }
 
-    function video() {
-        return document.querySelector('#playerVideo');
+    function audio() {
+        return document.querySelector('#playerAudio');
     }
 
     // Prefer a source the TV can stream/play directly; transcoding is a non-goal.
@@ -48,15 +48,15 @@ var Michelly = window.Michelly = window.Michelly || {};
         return fallback;
     }
 
-    // First video stream codec, used only for the unsupported-codec error message. The REST
-    // API serialises MediaStream.Type as the string 'Video' (MediaStreamType ordinal:
-    // Audio=0, Video=1, Subtitle=2), so the string match is primary; the numeric ordinal is
-    // deliberately not encoded here.
-    function firstVideoCodec(source) {
+    // First audio stream in the source; its codec feeds the stream URL. The REST API
+    // serialises MediaStream.Type as the string 'Audio' (MediaStreamType ordinal:
+    // Audio=0, Video=1, Subtitle=2), so the string match is primary and the numeric 0 is
+    // kept only as a legacy fallback.
+    function firstAudioCodec(source) {
         var streams = (source && source.MediaStreams) ? source.MediaStreams : [];
 
         for (var i = 0; i < streams.length; i++) {
-            if (streams[i].Type === 'Video') {
+            if (streams[i].Type === 'Audio' || streams[i].Type === 0) {
                 return streams[i].Codec || '';
             }
         }
@@ -64,8 +64,8 @@ var Michelly = window.Michelly = window.Michelly || {};
         return '';
     }
 
-    function positionTicks(v) {
-        return Math.floor((v && v.currentTime ? v.currentTime : 0) * TICKS_PER_SECOND);
+    function positionTicks(a) {
+        return Math.floor((a && a.currentTime ? a.currentTime : 0) * TICKS_PER_SECOND);
     }
 
     function reportPlaying(item, source) {
@@ -82,17 +82,17 @@ var Michelly = window.Michelly = window.Michelly || {};
         stopProgressTimer();
 
         progressTimer = setInterval(function () {
-            var v = video();
+            var a = audio();
 
-            if (!v || !currentItem) {
+            if (!a || !currentItem) {
                 return;
             }
 
             api().postSession('/Sessions/Playing/Progress', {
                 ItemId: currentItem.Id,
                 MediaSourceId: currentMediaSourceId,
-                PositionTicks: positionTicks(v),
-                IsPaused: !!v.paused,
+                PositionTicks: positionTicks(a),
+                IsPaused: !!a.paused,
                 CanSeek: true,
                 PlayMethod: 'DirectStream'
             });
@@ -118,65 +118,51 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
-    function clearVideo() {
-        var v = video();
+    function clearAudio() {
+        var a = audio();
 
-        if (!v) {
+        if (!a) {
             return;
         }
 
-        v.onended = null;
-        v.onerror = null;
+        a.onended = null;
+        a.onerror = null;
 
         try {
-            v.pause();
+            a.pause();
         } catch (pauseError) {
             console.warn(pauseError);
         }
 
-        v.src = '';
+        a.src = '';
 
         try {
-            v.load();
+            a.load();
         } catch (loadError) {
             console.warn(loadError);
         }
     }
 
-    // Stops playback and returns to the item detail view. The player's own back
+    // Stops playback and returns to the item detail view. The audio player's own back
     // handler stays on the stack, so a following Back reaches the item's handler.
     function stop() {
-        var v = video();
-        var ticks = positionTicks(v);
+        var a = audio();
+        var ticks = positionTicks(a);
 
         activeToken++;
         stopProgressTimer();
-        clearVideo();
+        clearAudio();
         reportStopped(ticks);
         currentMediaSourceId = null;
     }
 
-    // Playback finished on its own (or failed): remove the player's back entry too.
+    // Playback finished on its own (or failed): remove the audio back entry too.
     function finish() {
         if (ui().hasBackHandler()) {
             ui().popBackHandler();
         }
         stop();
         ui().showView('itemView');
-    }
-
-    function toggle() {
-        var v = video();
-
-        if (!v) {
-            return;
-        }
-
-        if (v.paused) {
-            v.play();
-        } else {
-            v.pause();
-        }
     }
 
     function formatTime(value) {
@@ -188,57 +174,30 @@ var Michelly = window.Michelly = window.Michelly || {};
     }
 
     function updateTime() {
-        var v = video();
-        var out = document.querySelector('#playerTime');
+        var a = audio();
+        var out = document.querySelector('#audioTime');
 
-        if (!v || !out) {
+        if (!a || !out) {
             return;
         }
 
-        out.textContent = formatTime(v.currentTime) + ' / ' + formatTime(v.duration);
-    }
-
-    // Progress bar width as a percentage; guarded against NaN/0/Infinity durations.
-    function updateProgress() {
-        var v = video();
-        var fill = document.querySelector('#playerProgressFill');
-
-        if (!v || !fill) {
-            return;
-        }
-
-        var duration = v.duration;
-        var percent = 0;
-
-        if (duration && isFinite(duration) && duration > 0) {
-            percent = (v.currentTime / duration) * 100;
-        }
-
-        if (!isFinite(percent) || percent < 0) {
-            percent = 0;
-        }
-
-        if (percent > 100) {
-            percent = 100;
-        }
-
-        fill.style.width = percent + '%';
+        out.textContent = formatTime(a.currentTime) + ' / ' + formatTime(a.duration);
     }
 
     // Keeps the button label in sync with the element's actual paused state.
     function updateToggleLabel() {
-        var v = video();
-        var button = document.querySelector('#playerToggle');
+        var a = audio();
+        var button = document.querySelector('#audioToggle');
 
-        if (!button || !v) {
+        if (!button || !a) {
             return;
         }
 
-        button.textContent = v.paused ? 'Play' : 'Pause';
+        button.textContent = a.paused ? 'Play' : 'Pause';
     }
 
     function focusToggle() {
-        var button = document.querySelector('#playerToggle');
+        var button = document.querySelector('#audioToggle');
 
         if (button) {
             button.focus();
@@ -247,7 +206,7 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     // True when focus is on a <button> inside the given view. Such a control handles
     // OK/Space itself through its own click, so the document-level handler must not
-    // toggle as well (a focused #playerToggle would otherwise double-toggle to a no-op).
+    // toggle as well (a focused #audioToggle would otherwise double-toggle to a no-op).
     function isButtonFocused(view) {
         var active = document.activeElement;
 
@@ -265,55 +224,72 @@ var Michelly = window.Michelly = window.Michelly || {};
         return false;
     }
 
-    // Bound once: the play/pause/time events keep the label, readout and bar live.
-    function bindVideoEvents() {
-        var v = video();
+    // Bound once: the play/pause/time events keep the label and time readout live.
+    function bindAudioEvents() {
+        var a = audio();
 
-        if (eventsBound || !v) {
+        if (eventsBound || !a) {
             return;
         }
 
         eventsBound = true;
 
-        v.addEventListener('play', function () {
+        a.addEventListener('play', function () {
             updateToggleLabel();
         });
-        v.addEventListener('pause', function () {
+        a.addEventListener('pause', function () {
             updateToggleLabel();
         });
-        v.addEventListener('timeupdate', function () {
+        a.addEventListener('timeupdate', function () {
             updateTime();
-            updateProgress();
         });
-        v.addEventListener('loadedmetadata', function () {
+        a.addEventListener('loadedmetadata', function () {
             updateTime();
-            updateProgress();
         });
     }
 
-    // Idempotently builds the always-visible, D-pad-operable overlay inside #playerView
-    // (a sibling right after #playerVideo so the video keeps its 100% box). It is never
-    // hidden with display:none: navigationInit()/navigate() only walk elements with
-    // offsetWidth > 0 && offsetHeight > 0, so a hidden overlay would kill D-pad focus.
-    function ensureControls() {
-        var view = document.querySelector('#playerView');
-        var v = video();
+    function renderNowPlaying(item) {
+        var view = document.querySelector('#audioView');
 
-        if (!view || !v) {
+        if (!view) {
             return;
         }
 
-        if (document.querySelector('#playerControls')) {
-            return;
+        var existing = view.querySelector('.audio-now');
+
+        if (existing) {
+            view.removeChild(existing);
         }
 
-        var controls = ui().el('div', 'player-controls');
-        controls.id = 'playerControls';
+        var card = ui().el('div', 'audio-now');
 
-        var row = ui().el('div', 'player-controls-row');
+        var posterWrap = ui().el('div', 'audio-poster');
+        var img = document.createElement('img');
+        img.alt = item.Name || '';
+        posterWrap.appendChild(img);
+        card.appendChild(posterWrap);
 
-        var button = ui().el('button', 'player-toggle', 'Play');
-        button.id = 'playerToggle';
+        var tag = item.ImageTags && item.ImageTags.Primary;
+        ui().renderImage(img, tag ? api().imageUrl(item.Id, 'Primary', { maxWidth: 480, tag: tag }) : null, item.Name || '');
+
+        card.appendChild(ui().el('div', 'audio-title', item.Name || 'Untitled'));
+
+        var artist = (item.Artists && item.Artists.length) ? item.Artists.join(', ') : item.AlbumArtist;
+
+        if (artist) {
+            card.appendChild(ui().el('div', 'audio-artist', artist));
+        }
+
+        if (item.Album) {
+            card.appendChild(ui().el('div', 'audio-album', item.Album));
+        }
+
+        var time = ui().el('div', 'audio-time', '0:00 / 0:00');
+        time.id = 'audioTime';
+        card.appendChild(time);
+
+        var button = ui().el('button', 'audio-toggle', 'Play');
+        button.id = 'audioToggle';
         button.type = 'button';
         button.tabIndex = 0;
         // OK/Space while the button is focused toggles here, explicitly, so it does not
@@ -335,33 +311,31 @@ var Michelly = window.Michelly = window.Michelly || {};
         button.onclick = function () {
             toggle();
         };
-        row.appendChild(button);
+        card.appendChild(button);
 
-        var time = ui().el('div', 'player-time', '0:00 / 0:00');
-        time.id = 'playerTime';
-        row.appendChild(time);
-
-        controls.appendChild(row);
-
-        var progress = ui().el('div', 'player-progress');
-        var fill = ui().el('div', 'player-progress-fill');
-        fill.id = 'playerProgressFill';
-        progress.appendChild(fill);
-        controls.appendChild(progress);
-
-        controls.appendChild(ui().el('div', 'player-hint', 'OK: Play / Pause    Back: Exit'));
-
-        if (v.nextSibling) {
-            view.insertBefore(controls, v.nextSibling);
-        } else {
-            view.appendChild(controls);
-        }
-
-        bindVideoEvents();
+        view.appendChild(card);
 
         updateToggleLabel();
         updateTime();
-        updateProgress();
+
+        if (typeof navigationInit === 'function') {
+            navigationInit();
+        }
+        focusToggle();
+    }
+
+    function toggle() {
+        var a = audio();
+
+        if (!a) {
+            return;
+        }
+
+        if (a.paused) {
+            a.play();
+        } else {
+            a.pause();
+        }
     }
 
     function play(item, userId) {
@@ -376,22 +350,10 @@ var Michelly = window.Michelly = window.Michelly || {};
             ui().showView('itemView');
         });
 
-        // Build the overlay before showView() so its own navigationInit() can find it.
-        ensureControls();
-
-        // ensureControls() is idempotent, so on a replay the overlay still holds the
-        // previous item's readout/bar; reset it before the new loadedmetadata arrives.
-        updateToggleLabel();
-        updateTime();
-        updateProgress();
-
-        ui().showView('playerView');
+        ui().showView('audioView');
         ui().setError('', '#itemError');
-
-        if (typeof navigationInit === 'function') {
-            navigationInit();
-        }
-        focusToggle();
+        bindAudioEvents();
+        renderNowPlaying(item);
 
         api().getPlaybackInfo(item.Id, userId, function (data) {
             if (token !== activeToken) {
@@ -399,28 +361,29 @@ var Michelly = window.Michelly = window.Michelly || {};
             }
 
             var source = pickMediaSource(data);
-            var v = video();
+            var a = audio();
 
-            if (!source || !v) {
+            if (!source || !a) {
                 finish();
-                ui().setError('No playable video source was found for this item.', '#itemError');
+                ui().setError('No playable audio source was found for this item.', '#itemError');
                 return;
             }
 
             currentMediaSourceId = source.Id;
 
+            var codec = firstAudioCodec(source);
             // Codec hint for the unsupported-codec error (container as a last resort).
-            var codecHint = firstVideoCodec(source) || source.Container || item.Container || '';
+            var codecHint = codec || source.Container || item.Container || '';
 
-            v.src = api().streamUrl(item.Id, source.Id, source.Container || item.Container || '');
+            a.src = api().audioStreamUrl(item.Id, source.Id, source.Container || item.Container, codec);
 
-            v.onended = function () {
+            a.onended = function () {
                 finish();
             };
 
-            v.onerror = function () {
+            a.onerror = function () {
                 // Read the media error before finish() clears the element.
-                var code = (v.error && v.error.code) ? v.error.code : 0;
+                var code = (a.error && a.error.code) ? a.error.code : 0;
 
                 finish();
 
@@ -428,7 +391,7 @@ var Michelly = window.Michelly = window.Michelly || {};
                     // code 4 covers both an unsupported codec and a failed stream
                     // request (401/404/5xx), so do not over-assert the codec.
                     if (codecHint) {
-                        ui().setError('This item\'s video codec (' + String(codecHint).toUpperCase() +
+                        ui().setError('This item\'s audio codec (' + String(codecHint).toUpperCase() +
                             ') is not supported by the TV, or the stream could not be loaded.', '#itemError');
                     } else {
                         ui().setError('This item cannot be played by the TV (unsupported codec or unavailable stream).', '#itemError');
@@ -438,7 +401,7 @@ var Michelly = window.Michelly = window.Michelly || {};
                 }
             };
 
-            v.play();
+            a.play();
 
             reportPlaying(item, source);
             startProgressTimer();
@@ -453,7 +416,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
-    // OK/Enter and Space toggle play/pause while the player view is active. When focus is
+    // OK/Enter and Space toggle play/pause while the audio view is active. When focus is
     // on a button inside the view the control's own click already handles the key, so the
     // handler returns early; with focus elsewhere (e.g. BODY) the remote still toggles.
     document.addEventListener('keydown', function (evt) {
@@ -461,7 +424,7 @@ var Michelly = window.Michelly = window.Michelly || {};
 
         var view = document.querySelector('.view.active');
 
-        if (!view || view.id !== 'playerView') {
+        if (!view || view.id !== 'audioView') {
             return;
         }
 
@@ -477,9 +440,9 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
     });
 
-    namespace.player = {
+    namespace.audio = {
         play: play,
-        stop: stop,
-        toggle: toggle
+        toggle: toggle,
+        stop: stop
     };
 })(Michelly);

@@ -256,7 +256,11 @@ var Michelly = window.Michelly = window.Michelly || {};
         var play = ui().el('button', 'primary', 'Play');
         play.type = 'button';
         play.onclick = function () {
-            namespace.player.play(item, userId);
+            if (item.Type === 'Audio') {
+                namespace.audio.play(item, userId);
+            } else {
+                namespace.player.play(item, userId);
+            }
         };
         actions.appendChild(play);
 

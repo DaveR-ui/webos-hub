@@ -268,6 +268,49 @@ var Michelly = window.Michelly = window.Michelly || {};
             '/Images/' + encodeURIComponent(type || 'Primary') + buildQuery(query);
     }
 
+    // First token of a comma-separated value (e.g. "flac,mp3" -> "flac"), or '' when absent.
+    function firstToken(value) {
+        if (value === undefined || value === null || value === '') {
+            return '';
+        }
+
+        var parts = String(value).split(',');
+        var first = parts.length ? parts[0] : '';
+
+        return first.replace(/^\s+|\s+$/g, '');
+    }
+
+    // Audio direct-stream URL. A media element cannot send the Authorization header,
+    // so the token travels in the query string (ApiKey current, api_key legacy alias).
+    // Jellyfin 10.10+ requires a container or an audioCodec, so never emit a bare /stream:
+    // prefer the first container token (a comma list like "flac,mp3" becomes "flac"),
+    // otherwise fall back to the first audioCodec token.
+    function audioStreamUrl(itemId, mediaSourceId, container, audioCodec) {
+        var containerValue = firstToken(container);
+        var query = {
+            static: 'true',
+            MediaSourceId: mediaSourceId
+        };
+
+        if (containerValue) {
+            query.container = containerValue;
+        } else {
+            var codecValue = firstToken(audioCodec);
+
+            if (codecValue) {
+                query.audioCodec = codecValue;
+            }
+        }
+
+        if (token) {
+            // ApiKey is the current query parameter; api_key is the legacy alias.
+            query.ApiKey = token;
+            query.api_key = token;
+        }
+
+        return baseUrl + '/Audio/' + encodeURIComponent(itemId) + '/stream' + buildQuery(query);
+    }
+
     // A <video> element cannot send the Authorization header, so the token travels in the query string.
     function streamUrl(itemId, mediaSourceId, container) {
         var query = {
@@ -311,6 +354,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         getPlaybackInfo: getPlaybackInfo,
         imageUrl: imageUrl,
         streamUrl: streamUrl,
+        audioStreamUrl: audioStreamUrl,
         postSession: postSession
     };
 })(Michelly);
