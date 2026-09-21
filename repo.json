@@ -7,16 +7,16 @@
       "rootRequired": false,
       "manifest": {
         "id": "com.daverui.michelly",
-        "version": "1.3.3",
+        "version": "1.3.4",
         "type": "web",
         "title": "MiChelly",
         "appDescription": "MiChelly - a standalone media client for webOS.",
         "iconUri": "https://daver-ui.github.io/webos-hub/icons/michelly.png",
         "sourceUrl": "https://github.com/DaveR-ui/webos-hub",
         "rootRequired": false,
-        "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/com.daverui.michelly_1.3.3_all.ipk",
+        "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/com.daverui.michelly_1.3.4_all.ipk",
         "ipkHash": {
-          "sha256": "0de28053b8ae6c54823d2c6166c1838b86353b3e9824965a9e4662d0fa8d1ab9"
+          "sha256": "c15c9ab231a470dd03ef8b567b425c0cfbfd7fe96b77e105d4d928929675c009"
         }
       }
     }
