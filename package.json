@@ -1,6 +1,6 @@
 {
   "name": "com.daverui.michelly",
-  "version": "1.3.3",
+  "version": "1.3.5",
   "description": "MiChelly - a standalone media client for webOS",
   "scripts": {
     "check": "ares-package --check",
