@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "bundleVersion": "2e46dac384155863",
+  "appVersion": "1.3.5",
+  "files": [
+    {
+      "path": "js/app/platform.js",
+      "type": "js",
+      "size": 4477,
+      "sha256": "66795158eb5b92ac9dd115fa5cf198a8ee0953b79a05a5ccfd274178c707359c"
+    },
+    {
+      "path": "js/app/api.js",
+      "type": "js",
+      "size": 11490,
+      "sha256": "d87c2edf6480eaa9a0532de38364403856fdc8013d1b5af5f13f47896ea0ae76"
+    },
+    {
+      "path": "js/app/auth.js",
+      "type": "js",
+      "size": 5154,
+      "sha256": "b8db3baa29210cd583305d9bca1a59f2b4f225ebd0a17c3ec0c1917565c98a0e"
+    },
+    {
+      "path": "js/app/ui.js",
+      "type": "js",
+      "size": 6095,
+      "sha256": "bfa085ad6c7f3c1271f671e14585558ae642f1b907a7e19b896ecd8d9d8967e6"
+    },
+    {
+      "path": "js/app/catalog.js",
+      "type": "js",
+      "size": 12008,
+      "sha256": "0f9d0b0a601977d06a46807682c37a005d80e2aac336a4329f8e7ed2d9636948"
+    },
+    {
+      "path": "js/app/player.js",
+      "type": "js",
+      "size": 14095,
+      "sha256": "0f09e5230eb872e07e04047dc5f6ad9a1ba9dca4fa0f8963517450181d882e99"
+    },
+    {
+      "path": "js/app/audio.js",
+      "type": "js",
+      "size": 12937,
+      "sha256": "a38d7a0baf8e36351693d2035ed64ac79b76a460f197a01b4e902dc95daf0888"
+    },
+    {
+      "path": "js/index.js",
+      "type": "js",
+      "size": 28037,
+      "sha256": "681b3fb5006ee9cdd98a56c6edad870c247d1824685ef7b4fec5cb44d6102fd6"
+    },
+    {
+      "path": "css/app.css",
+      "type": "css",
+      "size": 12633,
+      "sha256": "93b7ffd0fee003ee5046b80696972e8e14bd867ba81c4fcfcb211b78119e17b3"
+    }
+  ]
+}
