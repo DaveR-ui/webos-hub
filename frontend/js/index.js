@@ -249,7 +249,10 @@ function readPickerUrl() {
         return null;
     }
 
-    var composed = 'http://' + SERVER_IP_PREFIX + octet3 + '.' + octet4 + ':' + port;
+    // Compose from the parsed integers so a leading-zero octet (e.g. "010") is not
+    // re-read as octal by the URL parser (WHATWG IPv4: 010 -> 8) and silently
+    // connects/persists the wrong host.
+    var composed = 'http://' + SERVER_IP_PREFIX + String(parseInt(octet3, 10)) + '.' + String(parseInt(octet4, 10)) + ':' + String(parseInt(port, 10));
     if (!validURL(composed)) {
         return null;
     }
@@ -264,7 +267,7 @@ function setPickerFromServerUrl(url) {
         return false;
     }
 
-    var match = String(url).match(/(?:^|\/\/)192\.168\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?(?:\/|$)/i);
+    var match = String(url).trim().match(/^(?:(?:https?:)?\/\/)?192\.168\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?(?:\/|$)/i);
     if (!match) {
         return false;
     }
@@ -650,7 +653,10 @@ function renderSingleServer(server_id, server) {
     btn.innerText = "Connect";
     btn.type = "button";
     btn.onclick = function () {
-        setPickerFromServerUrl(server.baseurl || server.Address);
+        if (!setPickerFromServerUrl(server.baseurl || server.Address)) {
+            displayError("This server is not on a 192.168.x.x address and cannot be used with this picker.");
+            return;
+        }
         handleServerSelect();
     };
     server_card.appendChild(btn);

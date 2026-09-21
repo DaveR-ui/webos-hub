@@ -41,7 +41,8 @@ The app is a **wrapper**: it never renders library or playback UI itself.
 fields (`#octet3`/`#octet4`/`#port`) and the auto-connect checkbox from the most recent server, and
 honours the auto-connect flag unless the page was reached via Back/Forward. The pre-fill only happens
 when the saved host is `192.168.x.x`; otherwise the fields keep their defaults (`0`/`0`/`8096`) and
-auto-connect is skipped, so a stale or different-host entry never fires a bogus request.
+auto-connect is skipped, so a stale or different-host entry never fires a bogus request — and its
+server-list **Connect** button shows an error instead of connecting.
 
 Connecting (`handleServerSelect`) validates the two octets (`0-255` each) and the port (`1-65535`) and
 composes `http://192.168.<octet3>.<octet4>:<port>` (scheme fixed to `http`). If any field is invalid,
