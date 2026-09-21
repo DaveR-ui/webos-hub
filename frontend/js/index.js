@@ -220,8 +220,6 @@ function normalizeUrl(url) {
 
 // Personal fork: the picker only ever targets a 192.168.x.x LAN host.
 var SERVER_IP_PREFIX = '192.168.';
-var SERVER_DEFAULT_OCTET3 = '0';
-var SERVER_DEFAULT_OCTET4 = '0';
 var SERVER_DEFAULT_PORT = '8096';
 
 function isValidOctet(value) {
@@ -240,16 +238,12 @@ function isValidPort(value) {
     return num >= 1 && num <= 65535;
 }
 
-// Reads the three picker fields, treats an empty field as its default, validates
-// all three and composes the http:// URL. Returns null when anything is invalid.
+// Validates the three picker fields exactly as typed (an empty field is invalid,
+// not a default) and composes the http:// URL. Returns null when anything is invalid.
 function readPickerUrl() {
     var octet3 = document.querySelector('#octet3').value.trim();
     var octet4 = document.querySelector('#octet4').value.trim();
     var port = document.querySelector('#port').value.trim();
-
-    if (octet3 === '') { octet3 = SERVER_DEFAULT_OCTET3; }
-    if (octet4 === '') { octet4 = SERVER_DEFAULT_OCTET4; }
-    if (port === '') { port = SERVER_DEFAULT_PORT; }
 
     if (!isValidOctet(octet3) || !isValidOctet(octet4) || !isValidPort(port)) {
         return null;
