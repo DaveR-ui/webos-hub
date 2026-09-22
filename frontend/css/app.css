@@ -130,6 +130,57 @@
     width: 100%;
 }
 
+/* Folder-grouped browse sections (music libraries, built in catalog.js) */
+
+.folder-section {
+    -webkit-flex: 0 0 100%;
+    flex: 0 0 100%;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    width: 100%;
+    margin-bottom: 1.4rem;
+}
+
+.folder-section-head {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-align-items: flex-start;
+    align-items: flex-start;
+    width: 100%;
+    margin-bottom: 0.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 2px solid #3A2E5C;
+}
+
+.folder-section-title {
+    margin: 0;
+    font-size: 1.05em;
+    font-weight: bold;
+    color: #C9A6FF;
+}
+
+.folder-section-path {
+    margin-top: 0.15rem;
+    font-size: 0.6em;
+    color: #A99FC4;
+}
+
+/* Inline 'Show more' failure note (non-tabbable; the grid and the button stay live) */
+
+.grouped-error {
+    -webkit-flex: 0 0 100%;
+    flex: 0 0 100%;
+    width: 100%;
+    margin: 0.2rem 0 0.6rem 0;
+    font-size: 0.7em;
+    text-align: center;
+    color: #FF9AA8;
+}
+
 .card {
     display: block;
     width: 17%;

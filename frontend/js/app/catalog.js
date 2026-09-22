@@ -12,6 +12,11 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     var DEFAULT_LIMIT = 60;
 
+    // Items accumulated per grouped (music) fetch pass. Sized for the Chromium-38
+    // first-paint budget (~300 eager 320px thumbnails); 'Show more' pulls the next
+    // chunk, so everything stays reachable.
+    var GROUPED_CHUNK = 300;
+
     function api() {
         return namespace.api;
     }
@@ -250,6 +255,11 @@ var Michelly = window.Michelly = window.Michelly || {};
     function openViews(userId) {
         var browse = document.querySelector('#browseView');
 
+        // Entering the library list invalidates the grouped render cache (fresh data on next
+        // open) and supersedes any grouped fetch still in flight.
+        lastGrouped = null;
+        groupedEpoch++;
+
         setBackHandler(function () {
             ui().showView('pickerView');
         });
@@ -277,7 +287,12 @@ var Michelly = window.Michelly = window.Michelly || {};
             browse.appendChild(list);
 
             renderCardList(list, items, function (view) {
-                openItems(view.Id, userId, { title: view.Name, ParentId: view.Id });
+                // Music libraries get the folder-grouped card-grid render mode.
+                openItems(view.Id, userId, {
+                    title: view.Name,
+                    ParentId: view.Id,
+                    grouped: view.CollectionType === 'music'
+                });
             }, 'No libraries found for this user.');
 
             focusFirstCard(browse);
@@ -335,6 +350,384 @@ var Michelly = window.Michelly = window.Michelly || {};
         focusFirstCard(container);
     }
 
+    /* Folder-grouped browsing (music libraries). Pages are accumulated sequentially in
+     * an ES5 callback chain (no Promises), GROUPED_CHUNK items per pass; the render is
+     * one section per folder that directly holds media, ordered by a depth-first walk
+     * from the opened root. 'Show more' pulls the next chunk when the server reports a
+     * bigger total, so everything stays reachable. */
+
+    // Single-entry render cache so the card back handler can re-enter a grouped view
+    // synchronously without refetching. Shape: {parentId, userId, title, items, total, startIndex}.
+    var lastGrouped = null;
+
+    // Monotonic token bumped by openViews and every grouped fetch start, so a late chunk
+    // callback can tell whether it still owns the view (drop silently when it does not).
+    var groupedEpoch = 0;
+
+    function compareGrouped(a, b) {
+        var an = String((a && (a.SortName || a.Name)) || '');
+        var bn = String((b && (b.SortName || b.Name)) || '');
+
+        if (an < bn) {
+            return -1;
+        }
+        if (an > bn) {
+            return 1;
+        }
+        return 0;
+    }
+
+    function indexPush(index, key, item) {
+        if (!index.hasOwnProperty(key)) {
+            index[key] = [];
+        }
+
+        index[key].push(item);
+    }
+
+    function indexedChildren(index, key) {
+        return index.hasOwnProperty(key) ? index[key] : [];
+    }
+
+    // Grouped mode treats these types as folder nodes: plain file folders plus the
+    // MusicAlbum / MusicArtist library nodes Jellyfin types music folders with.
+    function isGroupedFolderType(type) {
+        return type === 'Folder' || type === 'MusicAlbum' || type === 'MusicArtist';
+    }
+
+    // Build the render model: {rootMedia, sections, orphans}. Folder-typed nodes (Folder,
+    // MusicAlbum, MusicArtist) are section containers only; Audio plus any unexpected type
+    // render as cards. Note: in grouped mode the fetch filter (Audio,Folder,MusicAlbum,
+    // MusicArtist) already excludes non-audio types (MusicVideo, Playlist, ...) from the
+    // response, so this media bucket is a defensive net, not a reachability guarantee.
+    // The visited set guarantees a malformed ParentId cycle cannot loop the walk; media
+    // whose parent is neither the opened root nor a known folder falls into the trailing
+    // orphan group, and unreachable folder nodes are picked up by the unvisited sweep.
+    function buildGroupedModel(items, parentId) {
+        var rootKey = String(parentId || '');
+        var foldersById = {};
+        var childrenByParent = {};
+        var visited = {};
+        var sections = [];
+        var rootMedia = [];
+        var orphans = [];
+        var i, item, pid;
+
+        for (i = 0; i < items.length; i++) {
+            item = items[i];
+            if (item && isGroupedFolderType(item.Type) && item.Id) {
+                foldersById[String(item.Id)] = item;
+            }
+        }
+
+        for (i = 0; i < items.length; i++) {
+            item = items[i];
+            if (!item || !item.Id) {
+                continue;
+            }
+
+            pid = String(item.ParentId || '');
+
+            if (pid === rootKey) {
+                indexPush(childrenByParent, rootKey, item);
+            } else if (foldersById.hasOwnProperty(pid)) {
+                indexPush(childrenByParent, pid, item);
+            } else if (!isGroupedFolderType(item.Type)) {
+                orphans.push(item);
+            }
+        }
+
+        visited[rootKey] = true;
+
+        function walk(folder, ancestors) {
+            var folderKey = String(folder.Id);
+
+            if (visited.hasOwnProperty(folderKey)) {
+                return;
+            }
+            visited[folderKey] = true;
+
+            var children = indexedChildren(childrenByParent, folderKey).slice(0);
+            children.sort(compareGrouped);
+
+            var media = [];
+            var subFolders = [];
+            var j;
+
+            for (j = 0; j < children.length; j++) {
+                if (isGroupedFolderType(children[j].Type)) {
+                    subFolders.push(children[j]);
+                } else {
+                    // Audio plus unknown types are media cards.
+                    media.push(children[j]);
+                }
+            }
+
+            // A folder holding only sub-folders renders no section of its own; the
+            // descendant media-folders' sections appear in its place.
+            if (media.length) {
+                sections.push({
+                    name: folder.Name || 'Untitled',
+                    path: ancestors.join(' / '),
+                    media: media
+                });
+            }
+
+            var childAncestors = ancestors.concat([folder.Name || 'Untitled']);
+
+            for (j = 0; j < subFolders.length; j++) {
+                walk(subFolders[j], childAncestors);
+            }
+        }
+
+        var rootChildren = indexedChildren(childrenByParent, rootKey).slice(0);
+        rootChildren.sort(compareGrouped);
+
+        for (i = 0; i < rootChildren.length; i++) {
+            item = rootChildren[i];
+
+            if (isGroupedFolderType(item.Type)) {
+                walk(item, []);
+            } else {
+                // Audio plus unexpected types card at the root.
+                rootMedia.push(item);
+            }
+        }
+
+        // Last-resort safety net: folder nodes still unvisited after the walk (unknown
+        // parent, e.g. an album whose artist fell outside the fetched chunk, or a
+        // disconnected ParentId cycle) are walked as trailing section roots. Their media
+        // stays reachable, the visited set still breaks any cycle, and folder types are
+        // never carded.
+        for (i = 0; i < items.length; i++) {
+            item = items[i];
+            if (item && isGroupedFolderType(item.Type) && item.Id &&
+                    !visited.hasOwnProperty(String(item.Id))) {
+                walk(item, []);
+            }
+        }
+
+        orphans.sort(compareGrouped);
+
+        return {
+            rootMedia: rootMedia,
+            sections: sections,
+            orphans: orphans
+        };
+    }
+
+    // Each card plays its own section's ordered media array (the album), not the whole
+    // accumulated flat list; media is captured per call, so the closure is safe in ES5.
+    function appendGroupedCards(listEl, media, userId, backFn) {
+        for (var i = 0; i < media.length; i++) {
+            listEl.appendChild(makeCard(media[i], function (item) {
+                openItem(item.Id, userId, backFn, media, media.indexOf(item));
+            }));
+        }
+    }
+
+    function renderGroupedView(container, title, items, total, focusShowMore, userId, parentId, opts, errMsg) {
+        ui().clear(container);
+
+        var header = ui().el('div', 'browse-header');
+        header.appendChild(ui().el('h1', 'browse-title', title || 'Browse'));
+        container.appendChild(header);
+
+        var hasMore = typeof total === 'number' && items.length < total;
+        var model = buildGroupedModel(items, parentId);
+
+        function backToGrouped() {
+            openItems(parentId, userId, cloneOpts(opts));
+        }
+
+        var renderable = model.rootMedia.length || model.sections.length || model.orphans.length || hasMore;
+
+        if (!renderable) {
+            var emptyList = ui().el('div', 'card-list');
+            container.appendChild(emptyList);
+            ui().showEmpty(emptyList, 'This folder is empty.');
+            return;
+        }
+
+        // Leading untitled grid for media items sitting directly at the opened root.
+        if (model.rootMedia.length) {
+            var strayList = ui().el('div', 'card-list');
+            container.appendChild(strayList);
+            appendGroupedCards(strayList, model.rootMedia, userId, backToGrouped);
+        }
+
+        // One flat .folder-section per media folder; headers are not tabbable so the
+        // D-pad walk only ever lands on cards.
+        for (var s = 0; s < model.sections.length; s++) {
+            var section = model.sections[s];
+            var sectionEl = ui().el('div', 'folder-section');
+            var head = ui().el('div', 'folder-section-head');
+            head.appendChild(ui().el('h2', 'folder-section-title', section.name));
+
+            if (section.path) {
+                head.appendChild(ui().el('div', 'folder-section-path', section.path));
+            }
+
+            sectionEl.appendChild(head);
+
+            var grid = ui().el('div', 'card-list');
+            sectionEl.appendChild(grid);
+            appendGroupedCards(grid, section.media, userId, backToGrouped);
+
+            container.appendChild(sectionEl);
+        }
+
+        // Trailing untitled group for media with an unknown parent folder.
+        if (model.orphans.length) {
+            var orphanList = ui().el('div', 'card-list');
+            container.appendChild(orphanList);
+            appendGroupedCards(orphanList, model.orphans, userId, backToGrouped);
+        }
+
+        // Continuation affordance: the pass stopped at GROUPED_CHUNK items and the server
+        // reports more. 'Show more' resumes the same sequential chain (nothing skipped or
+        // duplicated) and re-renders in place.
+        var moreButton = null;
+
+        if (hasMore) {
+            var pager = ui().el('div', 'pager');
+            moreButton = ui().el('button', 'pager-btn', 'Show more');
+            moreButton.type = 'button';
+
+            var fetching = false;
+
+            moreButton.onclick = function () {
+                if (fetching || !lastGrouped) {
+                    return;
+                }
+
+                fetching = true;
+                moreButton.textContent = 'Loading...';
+
+                // Claim the view: any newer navigation or fetch bumps the epoch and
+                // supersedes this result.
+                groupedEpoch++;
+                var moreEpoch = groupedEpoch;
+
+                fetchGroupedChunk(parentId, userId, opts, {
+                    items: lastGrouped.items,
+                    total: lastGrouped.total,
+                    startIndex: lastGrouped.startIndex
+                }, function (state, err) {
+                    // A newer navigation owns the view now: drop silently, no repaint.
+                    if (moreEpoch !== groupedEpoch) {
+                        return;
+                    }
+
+                    // Cache replaced while fetching (user left the view): drop the result.
+                    if (!lastGrouped || lastGrouped.parentId !== String(parentId || '') || lastGrouped.userId !== userId) {
+                        return;
+                    }
+
+                    if (err) {
+                        // Do not destroy the rendered grid: sync the cache with whatever
+                        // pages were consumed before the failure (so a retry never
+                        // duplicates), then re-render it with an inline note and keep the
+                        // D-pad focus on the re-created 'Show more' button.
+                        lastGrouped.startIndex = state.startIndex;
+                        if (typeof state.total === 'number') {
+                            lastGrouped.total = state.total;
+                        }
+
+                        renderGroupedView(document.querySelector('#browseView'), lastGrouped.title,
+                            lastGrouped.items, lastGrouped.total, true, userId, parentId, opts,
+                            'Could not load more items. Try again.');
+                        return;
+                    }
+
+                    storeAndRenderGrouped(state, parentId, userId, opts, true);
+                });
+            };
+
+            pager.appendChild(moreButton);
+            container.appendChild(pager);
+        }
+
+        // Inline show-more failure note (only present on the error re-render). Not tabbable.
+        if (errMsg) {
+            container.appendChild(ui().el('div', 'grouped-error', errMsg));
+        }
+
+        // A 'Show more' re-render keeps the D-pad focus on the (re-created) button when it
+        // is still there; everything else seeds the first card as before.
+        if (focusShowMore && moreButton) {
+            moreButton.focus();
+        } else {
+            focusFirstCard(container);
+        }
+    }
+
+    // Sequentially accumulate the next GROUPED_CHUNK items (ES5 callback chain, one page
+    // at a time). state carries {items, total, startIndex} so 'Show more' resumes exactly
+    // where the last pass stopped; items are consumed one-by-one against the server offset,
+    // so a chunk boundary never skips or duplicates entries. onDone(state, err).
+    function fetchGroupedChunk(parentId, userId, opts, state, onDone) {
+        var target = state.items.length + GROUPED_CHUNK;
+
+        function requestPage() {
+            api().getItems({
+                ParentId: parentId,
+                Recursive: opts.Recursive !== false,
+                IncludeItemTypes: 'Audio,Folder,MusicAlbum,MusicArtist',
+                StartIndex: state.startIndex,
+                Limit: opts.Limit || DEFAULT_LIMIT,
+                SortBy: opts.SortBy || 'SortName',
+                SortOrder: opts.SortOrder || 'Ascending',
+                Fields: 'PrimaryImageAspectRatio,ParentId'
+            }, function (data) {
+                var items = (data && data.Items) ? data.Items : [];
+                var i = 0;
+
+                if (data && typeof data.TotalRecordCount === 'number') {
+                    state.total = data.TotalRecordCount;
+                }
+
+                while (i < items.length && state.items.length < target) {
+                    state.items.push(items[i]);
+                    state.startIndex++;
+                    i++;
+                }
+
+                var exhausted = !items.length ||
+                    (typeof state.total === 'number' && state.items.length >= state.total);
+
+                if (exhausted || state.items.length >= target) {
+                    onDone(state);
+                    return;
+                }
+
+                requestPage();
+            }, function (err) {
+                onDone(state, err);
+            });
+        }
+
+        requestPage();
+    }
+
+    // Publish a finished chunk into the single-entry cache and render it. focusShowMore
+    // carries the D-pad focus-continuity flag through to renderGroupedView.
+    function storeAndRenderGrouped(state, parentId, userId, opts, focusShowMore) {
+        var browse = document.querySelector('#browseView');
+
+        lastGrouped = {
+            parentId: String(parentId || ''),
+            userId: userId,
+            title: opts.title,
+            items: state.items,
+            total: (typeof state.total === 'number') ? state.total : state.items.length,
+            startIndex: state.startIndex
+        };
+
+        renderGroupedView(browse, lastGrouped.title, lastGrouped.items, lastGrouped.total,
+            focusShowMore, userId, parentId, opts);
+    }
+
     function openItems(parentId, userId, opts) {
         opts = opts || {};
 
@@ -347,6 +740,38 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
 
         ui().showView('browseView');
+
+        if (opts.grouped === true) {
+            // Single-entry cache hit: re-render synchronously (e.g. returning from item view)
+            // instead of refetching the accumulated chunk(s).
+            if (lastGrouped && lastGrouped.parentId === String(parentId || '') && lastGrouped.userId === userId) {
+                renderGroupedView(browse, lastGrouped.title, lastGrouped.items, lastGrouped.total,
+                    false, userId, parentId, opts);
+                return;
+            }
+
+            ui().showLoading(browse);
+
+            // Claim the view: any newer navigation or fetch bumps the epoch and supersedes
+            // this result (no repaint, no cache write) when it lands late.
+            groupedEpoch++;
+            var initialEpoch = groupedEpoch;
+
+            fetchGroupedChunk(parentId, userId, opts, { items: [], total: null, startIndex: 0 }, function (state, err) {
+                if (initialEpoch !== groupedEpoch) {
+                    return;
+                }
+
+                if (err) {
+                    ui().showError(browse, err);
+                    return;
+                }
+
+                storeAndRenderGrouped(state, parentId, userId, opts, false);
+            });
+            return;
+        }
+
         ui().showLoading(browse);
 
         api().getItems({
