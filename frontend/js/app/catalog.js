@@ -617,7 +617,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         ui().showView('playlistsView');
         ui().clear(view);
 
-        var header = ui().el('div', 'playlist-header');
+        var header = ui().el('div', 'browse-header');
         header.appendChild(ui().el('h1', 'playlist-title',
             plSlotDetail === null ? 'Playlists' : SLOT_NAMES[plSlotDetail]));
         view.appendChild(header);

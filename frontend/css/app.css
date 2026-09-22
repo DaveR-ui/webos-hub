@@ -65,8 +65,6 @@
 }
 
 .browse-header {
-    -webkit-flex: 0 0 100%;
-    flex: 0 0 100%;
     display: -webkit-flex;
     display: flex;
     -webkit-align-items: center;
@@ -86,8 +84,6 @@
 }
 
 .pager {
-    -webkit-flex: 0 0 100%;
-    flex: 0 0 100%;
     display: -webkit-flex;
     display: flex;
     -webkit-justify-content: center;
@@ -116,9 +112,12 @@
     color: #C9A6FF;
 }
 
+/* width: 100% is the horizontal axis in every parent, so the same rule is correct both in
+ * the row-direction #browseView and inside the column-direction .folder-section. A
+ * percentage flex-basis would instead size the main axis (the height inside a column
+ * container) and overlap the rows. */
+
 .card-list {
-    -webkit-flex: 0 0 100%;
-    flex: 0 0 100%;
     display: -webkit-flex;
     display: flex;
     -webkit-flex-wrap: wrap;
@@ -130,26 +129,19 @@
     width: 100%;
 }
 
-/* Folder-grouped browse sections (music libraries, built in catalog.js) */
+/* Folder-grouped browse sections (music libraries, built in catalog.js).
+ * Deliberately display: block (never flex-direction: column + flex-basis percentages): the
+ * section is a plain vertical stack, children express full width with width: 100%, and the
+ * height is normal block flow - no overlap, no clipped bottom row. */
 
 .folder-section {
-    -webkit-flex: 0 0 100%;
-    flex: 0 0 100%;
-    display: -webkit-flex;
-    display: flex;
-    -webkit-flex-direction: column;
-    flex-direction: column;
+    display: block;
     width: 100%;
     margin-bottom: 1.4rem;
 }
 
 .folder-section-head {
-    display: -webkit-flex;
-    display: flex;
-    -webkit-flex-direction: column;
-    flex-direction: column;
-    -webkit-align-items: flex-start;
-    align-items: flex-start;
+    display: block;
     width: 100%;
     margin-bottom: 0.4rem;
     padding-bottom: 0.3rem;
@@ -172,8 +164,6 @@
 /* Inline 'Show more' failure note (non-tabbable; the grid and the button stay live) */
 
 .grouped-error {
-    -webkit-flex: 0 0 100%;
-    flex: 0 0 100%;
     width: 100%;
     margin: 0.2rem 0 0.6rem 0;
     font-size: 0.7em;
@@ -781,21 +771,6 @@
     padding: 2rem;
 }
 
-/* Manage view header. Deliberately not .browse-header: that rule carries flex-basis 100%,
- * which sizes the height (main axis) inside this column container instead of the width. */
-
-.playlist-header {
-    display: -webkit-flex;
-    display: flex;
-    -webkit-align-items: center;
-    align-items: center;
-    width: 100%;
-    max-width: 48rem;
-    margin-bottom: 1rem;
-    padding-bottom: 0.6rem;
-    border-bottom: 2px solid #3A2E5C;
-}
-
 .playlist-title {
     margin: 0;
     font-size: 1.2em;
@@ -984,8 +959,8 @@
     color: #A99FC4;
 }
 
-/* Status line for both the manage view and the item-view picker. No flex shorthand: the
- * manage view is a COLUMN container, where flex-basis: 100% would size the height instead. */
+/* Status line reused by the column manage view and the row item-view picker; width: 100% is
+ * the correct direction-independent primitive in either parent. */
 
 .playlist-status {
     width: 100%;
@@ -999,6 +974,8 @@
     word-wrap: break-word;
 }
 
+/* Manage view: the header and the status line share the slot column's width cap. */
+#playlistsView .browse-header,
 #playlistsView .playlist-status {
     max-width: 48rem;
 }
