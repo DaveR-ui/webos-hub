@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "bundleVersion": "c2f7f5000f952862",
+  "bundleVersion": "026fde72d0cb1f4e",
   "appVersion": "1.3.5",
   "files": [
     {
@@ -30,8 +30,8 @@
     {
       "path": "js/app/catalog.js",
       "type": "js",
-      "size": 33424,
-      "sha256": "c3a95c6fef112d67675cb5761cd2e44ed687a8a856763c0eb13857c3e5663bcb"
+      "size": 59161,
+      "sha256": "c6f32da2ba4bb940a44f1c34385703799684eddbfba421fecfa8c5120a4da313"
     },
     {
       "path": "js/app/player.js",
@@ -48,14 +48,14 @@
     {
       "path": "js/index.js",
       "type": "js",
-      "size": 28037,
-      "sha256": "681b3fb5006ee9cdd98a56c6edad870c247d1824685ef7b4fec5cb44d6102fd6"
+      "size": 28179,
+      "sha256": "6567c10224ab266a03b63dde1cd40c23317d6345ef710218d879eb38675cec09"
     },
     {
       "path": "css/app.css",
       "type": "css",
-      "size": 14573,
-      "sha256": "b46f933bbb8f81ea791a73da59f232a0aa7ad1e948775d459509f0d54e22a2bb"
+      "size": 19937,
+      "sha256": "0379513ebcaa002dd871906c02316c24aa6c04de42f7c4a4392e083498b8083e"
     }
   ]
 }

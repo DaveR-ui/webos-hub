@@ -16,7 +16,7 @@
         "rootRequired": false,
         "ipkUrl": "https://daver-ui.github.io/webos-hub/ipk/com.daverui.michelly_1.3.5_all.ipk",
         "ipkHash": {
-          "sha256": "fa838d7ae272f22409b7760835cecc5e7af8077b2772273fc28cb79c2e83c4dd"
+          "sha256": "b0fe665072e4edaf41fe8cba741a88a8c64e65d5c90246bc04551fbd16dbf123"
         }
       }
     }
