@@ -18,6 +18,9 @@ var Michelly = window.Michelly = window.Michelly || {};
     var currentMediaSourceId = null;
     var activeToken = 0;
     var eventsBound = false;
+    // True once /Sessions/Playing was posted for the current item, so stop() only posts the
+    // matching /Sessions/Playing/Stopped when a Playing actually went out.
+    var sourceLoaded = false;
 
     function ui() {
         return namespace.ui;
@@ -25,6 +28,12 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     function api() {
         return namespace.api;
+    }
+
+    // True while an ordered list session is driving this player. In that mode the playlist
+    // owns the single back-stack entry and the auto-advance, so the player must not push one.
+    function listMode() {
+        return !!(namespace.playlist && namespace.playlist.isActive());
     }
 
     function audio() {
@@ -152,12 +161,26 @@ var Michelly = window.Michelly = window.Michelly || {};
         activeToken++;
         stopProgressTimer();
         clearAudio();
-        reportStopped(ticks);
+
+        // Only post Stopped for an item whose Playing was actually posted; otherwise this
+        // is a phantom stop for something that never started.
+        if (sourceLoaded) {
+            reportStopped(ticks);
+        }
+        sourceLoaded = false;
+
         currentMediaSourceId = null;
     }
 
     // Playback finished on its own (or failed): remove the audio back entry too.
     function finish() {
+        // In list mode the playlist owns the back entry and tears the player down; the
+        // same path must never auto-advance into a broken loop.
+        if (listMode()) {
+            namespace.playlist.stop();
+            return;
+        }
+
         if (ui().hasBackHandler()) {
             ui().popBackHandler();
         }
@@ -201,6 +224,29 @@ var Michelly = window.Michelly = window.Michelly || {};
 
         if (button) {
             button.focus();
+        }
+    }
+
+    // Shows/dims the Prev/Next list controls. They are hidden entirely for a single-item
+    // play, so that path behaves exactly as before. Dimming is a CSS attribute change only:
+    // the button stays focusable and its onclick simply no-ops at a boundary. Never set the
+    // `disabled` attribute — navigate() in index.js includes any element with
+    // offsetWidth > 0 && offsetHeight > 0, and .focus() on a disabled button silently
+    // fails, which would make the D-pad appear stuck.
+    function updateListControls() {
+        var playlist = namespace.playlist;
+        var active = !!(playlist && playlist.isActive());
+        var prev = document.querySelector('#audioPrev');
+        var next = document.querySelector('#audioNext');
+
+        if (prev) {
+            prev.style.display = active ? '' : 'none';
+            prev.className = (active && !playlist.hasPrevious()) ? 'audio-skip is-inert' : 'audio-skip';
+        }
+
+        if (next) {
+            next.style.display = active ? '' : 'none';
+            next.className = (active && !playlist.hasNext()) ? 'audio-skip is-inert' : 'audio-skip';
         }
     }
 
@@ -288,6 +334,30 @@ var Michelly = window.Michelly = window.Michelly || {};
         time.id = 'audioTime';
         card.appendChild(time);
 
+        var prev = ui().el('button', 'audio-skip', 'Prev');
+        prev.id = 'audioPrev';
+        prev.type = 'button';
+        prev.tabIndex = 0;
+        // OK/Space while the button is focused acts here, explicitly, so it does not depend
+        // on the platform synthesizing a click from the key. preventDefault() + returning
+        // false suppress that synthetic click, so the onclick below (pointer use) cannot
+        // fire a second time.
+        prev.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                namespace.playlist.previous();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        prev.onclick = function () {
+            namespace.playlist.previous();
+        };
+        card.appendChild(prev);
+
         var button = ui().el('button', 'audio-toggle', 'Play');
         button.id = 'audioToggle';
         button.type = 'button';
@@ -313,15 +383,32 @@ var Michelly = window.Michelly = window.Michelly || {};
         };
         card.appendChild(button);
 
+        var next = ui().el('button', 'audio-skip', 'Next');
+        next.id = 'audioNext';
+        next.type = 'button';
+        next.tabIndex = 0;
+        // Same explicit OK/Space handling as the toggle/skip buttons: act on keydown and
+        // suppress the synthetic click so a synthesizing platform cannot double-fire.
+        next.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                namespace.playlist.next();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        next.onclick = function () {
+            namespace.playlist.next();
+        };
+        card.appendChild(next);
+
         view.appendChild(card);
 
         updateToggleLabel();
         updateTime();
-
-        if (typeof navigationInit === 'function') {
-            navigationInit();
-        }
-        focusToggle();
     }
 
     function toggle() {
@@ -345,15 +432,24 @@ var Michelly = window.Michelly = window.Michelly || {};
         activeToken++;
         var token = activeToken;
 
-        ui().pushBackHandler(function () {
-            stop();
-            ui().showView('itemView');
-        });
+        // In list mode the playlist owns the single back entry; a single-item play keeps
+        // the player's own entry, exactly as before.
+        if (!listMode()) {
+            ui().pushBackHandler(function () {
+                stop();
+                ui().showView('itemView');
+            });
+        }
 
-        ui().showView('audioView');
         ui().setError('', '#itemError');
         bindAudioEvents();
+
+        // Make #audioView the active view first, then build the card and seed focus, so the
+        // card's controls are created inside the visible view and focus lands on them.
+        ui().showView('audioView');
         renderNowPlaying(item);
+        updateListControls();
+        focusToggle();
 
         api().getPlaybackInfo(item.Id, userId, function (data) {
             if (token !== activeToken) {
@@ -378,6 +474,12 @@ var Michelly = window.Michelly = window.Michelly || {};
             a.src = api().audioStreamUrl(item.Id, source.Id, source.Container || item.Container, codec);
 
             a.onended = function () {
+                // List mode: hand off to the playlist instead of finishing this item.
+                if (listMode()) {
+                    namespace.playlist.advance();
+                    return;
+                }
+
                 finish();
             };
 
@@ -404,13 +506,20 @@ var Michelly = window.Michelly = window.Michelly || {};
             a.play();
 
             reportPlaying(item, source);
+            sourceLoaded = true;
             startProgressTimer();
         }, function (err) {
             if (token !== activeToken) {
                 return;
             }
 
-            ui().popBackHandler();
+            if (listMode()) {
+                // A failed PlaybackInfo ends the list (the playlist pops its own handler)
+                // rather than auto-advancing into a broken loop.
+                namespace.playlist.stop();
+            } else {
+                ui().popBackHandler();
+            }
             ui().showView('itemView');
             ui().setError(ui().describeError(err), '#itemError');
         });

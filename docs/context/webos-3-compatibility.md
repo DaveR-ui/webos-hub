@@ -2,8 +2,8 @@
 last_updated: 2026-09-21
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
-tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt]
-version: 2.4
+tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist]
+version: 2.5
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -250,6 +250,21 @@ On-device test checklist for the target webOS 3.0 TV:
       double-toggle to a no-op, and must work even if the remote's OK produces no click); Back stops and
       returns to the item detail.
 - [ ] Playback starts, OK/Space pauses/resumes, Back stops and returns to the item detail.
+- [ ] Ordered list playback: open an album / season / folder / Continue Watching, press **Play** →
+      the item starts and playback auto-advances to the **next** item when it ends.
+- [ ] D-pad Up/Down reaches **Prev**/**Next** in the player overlay (`#playerPrev`/`#playerNext`) and
+      the audio card (`#audioPrev`/`#audioNext`); OK on either moves the list; at the first/last item
+      the control stays focusable but is **dimmed** (`is-inert`) and does nothing — it is never
+      `disabled`, and focus must not appear stuck.
+- [ ] Playback of the **last** item ends the session and returns to `#itemView` (no wrap/repeat/shuffle).
+- [ ] A **single item** with no list context still plays exactly as before: the Prev/Next controls are
+      hidden and Back behaves normally.
+- [ ] Back during a list session stops playback and returns to `#itemView` on **one** press (the
+      playlist owns a single back entry); a subsequent Back leaves the item view as before.
+- [ ] A list item whose stream errors **ends the list** after the failed item (it must not
+      auto-advance into a broken loop); the error stays visible in `#itemError`.
+- [ ] A **mixed Audio/Video** list plays each item with its own player and still uses exactly one back
+      entry per session.
 - [ ] Audio item **Play** opens `#audioView` and shows the now-playing card (poster/title/artist/album).
 - [ ] Audio playback starts for an MP3/WAV/Ogg item; OK/Space toggles play/pause, Back stops and returns to item detail.
 - [ ] A FLAC item is expected to **fail** on Chromium 38 (native `<audio>` FLAC is Chrome 56+) — record the error text.

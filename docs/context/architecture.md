@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-21
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback, and the bundled Luna discovery service.
-tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, luna, discovery, d-pad, media-server]
-version: 2.5
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback (including ordered list playback), and the bundled Luna discovery service.
+tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, luna, discovery, d-pad, media-server]
+version: 2.6
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -40,9 +40,9 @@ loader — the verified remote payload when reachable, the packaged copies other
 | `frontend/js/app/api.js` | ES5 XHR media-server REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** Remote payload. |
 | `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; the tri-state default user (`michelly_default_user`) for automatic sign-in; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** Remote payload. |
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** Remote payload. |
-| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`. **Fork-only.** Remote payload. |
-| `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Play/Pause button, time readout, progress bar), play/pause, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
-| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card, play/pause/stop, session reporting. **Fork-only.** Remote payload. |
+| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`). **Fork-only.** Remote payload. |
+| `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Prev / Play/Pause / Next buttons, time readout, progress bar), play/pause, list-aware auto-advance, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
+| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card (Prev / Play/Pause / Next), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow (auto-connect from the stored `baseurl`, session-first + default-user auto-login), the runtime-built default-user settings view, main key/Back handling. Remote payload. |
 | `frontend/css/main.css` | Picker and shared control styling. |
 | `frontend/css/app.css` | Native view / catalog / player / audio now-playing styling (flexbox only). **Fork-only.** Remote payload. |
@@ -224,6 +224,10 @@ exposes `GET /System/Ping` (plain text `Jellyfin Server`) and, since 10.7, `GET 
   **Episodes** button when `Type === 'Series'`.
 - `openEpisodes(seriesId, …)` and `openResume(userId)` cover series episodes and Continue Watching.
 
+The list views also hand the rendered page and the tapped index to `openItem`/`renderItem`, so the
+**Play** button can start an ordered list session (`Michelly.playlist`) — see
+[Ordered list playback](#ordered-list-playback-michellyplaylist).
+
 Every selectable card is a `<button class="card">` so the global D-pad selector in `index.js` can reach
 it. Each navigation resets the back stack and pushes **exactly one** handler that recreates its parent,
 so the stack stays bounded no matter how deep the user goes. Missing or failed images swap to a text
@@ -277,6 +281,95 @@ overlay is a play/pause + progress **indicator** (no seek handling). Native `con
 **not** set on `#playerVideo` — the stable shell `frontend/index.html` is not edited; the D-pad drives
 the overlay button instead.
 
+#### Ordered list playback (`Michelly.playlist`)
+
+Playing the list the user just opened plays it **in order**: the item auto-advances on `ended`, the
+D-pad reaches **Prev**/**Next**, and the session **stops after the last item** (no wrap, no repeat, no
+shuffle). A single item opened with **no** list context behaves exactly as before.
+
+**The catalog owns the session.** `frontend/js/app/catalog.js` already renders the list and already
+routes `Type === 'Audio'` to the audio player, so it also owns the queue: it exposes
+`Michelly.playlist` (`isActive`, `start`, `advance`, `next`, `previous`, `hasNext`, `hasPrevious`,
+`stop`) next to `Michelly.catalog`. One owner means the advance logic is **not** duplicated in the two
+players and a mixed Audio/Video list cannot leak extra back-stack entries. The session state lives in
+the module-level `listItems`, `listIndex`, `listUserId`, `listActive` and `listKind`
+(`'video'`/`'audio'`/`null`) variables.
+
+**The list is captured at list-render time.** `renderItemsView`, `openEpisodes` and `openResume` pass
+the items array and the tapped index (`items.indexOf(item)`) through `openItem(itemId, userId, back,
+list, listIndex)` into `renderItem(…, list, listIndex)`. The **Play** button then starts the session:
+
+```js
+if (list && list.length && listIndex >= 0) {
+    var queue = list.slice(0);
+    queue[listIndex] = item;   // the fetched detail is richer than the /Items entry
+    namespace.playlist.start(queue, listIndex, userId);
+}
+```
+
+The queue is a copy of the rendered page with the fetched item detail substituted at the tapped index.
+The Series-detail **Episodes** button and the `openItem(seriesId, userId)` fallback keep the
+**no-list** path, so they remain single-item.
+
+**Single-owner back-stack invariant.** `playlist.start()` pushes **exactly one** handler, which calls
+the internal `endSession(false)` — **not** a public `end()`, and with **no** pop. While a session is
+active, `player.play()` / `audio.play()` push **no** handler (`listMode()` →
+`!!(namespace.playlist && namespace.playlist.isActive())`), and `finish()` defers to
+`namespace.playlist.stop()`. **Auto-advance and next/previous never push or pop a handler.** The one
+subtlety: `Michelly.ui.handleBack()` pops the handler **before** invoking it, so the handler pushed by
+`start()` must not pop again (`endSession(false)`); only the direct teardown paths — `finish()`,
+`advance()` past the last item, and a failed `PlaybackInfo` — call `playlist.stop()` →
+`endSession(true)`, which pops that single entry. Either way, exactly **one** handler is popped per Back
+press in every flow (list active, list ended, single item).
+
+**Routing and handoff.** `playCurrent()` picks `kind = item.Type === 'Audio' ? 'audio' : 'video'` and
+routes to `namespace.audio.play(item, userId)` or `namespace.player.play(item, userId)`. If the kind
+changed, it calls `stopCurrentPlayer()` first (which calls `audio.stop()`/`player.stop()` and clears
+`listKind`), so a mixed list keeps exactly one player and one progress timer alive. Note that
+`startProgressTimer()` only clears/starts the 15 s progress timer; it does **not** post `Stopped`. The
+players do **not** call `stop()` themselves between items — the playlist's `stopCurrentPlayer()` does,
+which clears the previous timer and posts the finished item's `/Sessions/Playing/Stopped` through the
+player's `stop()` → `reportStopped()`.
+
+**Exactly one Stopped per started item.** Each player keeps a module-level `sourceLoaded` flag, set to
+`true` at the exact point `reportPlaying()` (i.e. `POST /Sessions/Playing`) is sent in the
+PlaybackInfo-success path, and reset to `false` in `stop()`. `stop()` posts
+`/Sessions/Playing/Stopped` **only when `sourceLoaded` is true**, so an item for which `Playing` was
+never sent — Back pressed while `PlaybackInfo` is pending, a failed `PlaybackInfo`, or a list teardown
+of a not-yet-started item — cannot emit a phantom Stopped. A normally completed (`ended`) or
+interrupted (`Back`) item still posts exactly one Stopped, because its `Playing` was sent and
+`sourceLoaded` is cleared with it. (This also fixes the pre-existing single-item case, whose back
+handler is `function () { stop(); ui().showView('itemView'); }` and hits the same path.)
+
+**Stop at the last item.** `advance()` stops the current player, and when `index + 1 >= items.length`
+it ends the session (`end()` → pops the handler → `#itemView`) and returns `false`; otherwise it moves
+the index and plays the next item. `next()`/`previous()` are boundary **no-ops** (return `false`) and
+never wrap.
+
+**Page boundary.** `openItems` fetches a single page (`DEFAULT_LIMIT = 60`), and the captured list is
+**exactly that page**. Reaching its end ends the session cleanly; the next page is **explicitly not**
+fetched mid-playback. Auto-playing items the user never saw — plus a mid-playback network failure mode
+— is worse than stopping, and one page covers the common album/season case. `total`/`StartIndex` are
+deliberately not threaded into playback.
+
+**Error mid-list ends the list.** `onerror` and the no-source paths call `finish()`, which in list mode
+calls `playlist.stop()`: the session ends after a **single** failed item. It must never auto-advance
+into a broken loop. The same holds for a failed `PlaybackInfo` (the player's error callback ends the
+list instead of popping its own handler).
+
+**Prev/Next controls.** `player.js` builds `#playerPrev`/`#playerNext` (attribute-class `player-skip`)
+into the existing `.player-controls-row`, ordered `Prev, Play/Pause, Next`; `audio.js` builds
+`#audioPrev`/`#audioNext` (`audio-skip`) around `#audioToggle`. `updateListControls()` is called after
+the overlay/card exists, immediately around `ui().showView(...)` — before it in `player.js` (so the
+overlay is in place for the view's own `navigationInit()`) and after it in `audio.js` (once the card has
+been rebuilt inside the active view). With no active list it sets the buttons to
+`display: none` (so a single-item play is unchanged and the D-pad walk is identical); with an active
+list it shows them and adds a **dimming** class (`is-inert`, `opacity: 0.45`) when the boundary makes
+Prev/Next a no-op. The `disabled` attribute is **never** used: `navigate()` in `frontend/js/index.js`
+includes any element with `offsetWidth > 0 && offsetHeight > 0`, and `.focus()` on a disabled button
+silently fails, which would make the D-pad appear stuck. The buttons stay focusable and simply no-op at
+a boundary. The overlay/card itself stays **always visible**.
+
 
 #### Audio playback
 
@@ -285,9 +378,11 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
 - `frontend/js/app/catalog.js` routes the item-detail **Play** button: `Type === 'Audio'` →
   `Michelly.audio.play(item, userId)`, everything else → `Michelly.player.play(…)`. This fixes the
   pre-existing bug where an audio item was opened in the video player (`/Videos/{id}/stream`).
-- `audio.play()` pushes one back handler, shows `#audioView` and renders the now-playing card
-  (`.audio-now`: poster, title, artist, album, `#audioTime` and the `#audioToggle` Play/Pause button),
-  then runs `POST /Items/{id}/PlaybackInfo` and picks the first direct-stream/direct-play source.
+- `audio.play()` pushes one back handler **unless a list session is active** (`listMode()`; the playlist
+  already owns the entry), shows `#audioView` and renders the now-playing card
+  (`.audio-now`: poster, title, artist, album, `#audioTime`, the Prev/Next `audio-skip` buttons and the
+  `#audioToggle` Play/Pause button), then runs `POST /Items/{id}/PlaybackInfo` and picks the first
+  direct-stream/direct-play source.
 - `#playerAudio.src = api.audioStreamUrl(itemId, source.Id, container, audioCodec)` →
   `/Audio/{itemId}/stream?static=true&container=…|audioCodec=…&MediaSourceId=…` — a **direct stream,
   no transcode**. Jellyfin 10.10+ rejects a bare `/stream`, so the first container token is always
@@ -367,6 +462,11 @@ it through `autoConnectSavedServer`; otherwise the picker stays authoritative an
 | Up / Down | 38 / 40 | `navigate(∓1)` — move focus linearly through **visible** tabbable elements only (`input, button, a, area, object, select, textarea, [contenteditable]`; elements inside hidden views are excluded). |
 | Left / Right | 37 / 39 | No-ops. |
 | Back | 461 | `backPressed()` — pop **one** in-app back-stack handler via `Michelly.ui.handleBack()`; only when the stack is empty call `webOS.platformBack()`. |
+
+While a list session plays, the **Prev**/**Next** buttons are part of the same visible tabbable set, so
+Up/Down reaches them like any other control. They are hidden (`display: none`) for a single-item play,
+which keeps the D-pad walk unchanged there; at a list boundary the button stays visible and focusable
+but dimmed (`is-inert`) — it is never `disabled`, because `.focus()` on a disabled button fails.
 
 OK (13) and Space (32) toggle the auto-connect checkbox in the picker (`handleCheckbox`); while
 `#playerView` (`player.js`) or `#audioView` (`audio.js`) is active, the same keys toggle play/pause.
