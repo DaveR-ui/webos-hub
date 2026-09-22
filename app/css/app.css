@@ -403,6 +403,29 @@
     outline-offset: 3px;
 }
 
+/* List-session Prev/Next (built in player.js; hidden for a single-item play) */
+
+.player-skip {
+    width: auto;
+    min-width: 6rem;
+    margin: 0 1rem;
+    background: #241B3D;
+    border-color: #C9A6FF;
+    color: #C9A6FF;
+}
+
+.player-skip:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+.player-skip.is-inert {
+    opacity: 0.45;
+}
+
 .player-time {
     margin: 0 1rem;
     font-size: 0.8em;
@@ -535,6 +558,29 @@
     color: #1A0F33;
     outline: 4px solid #C9A6FF;
     outline-offset: 3px;
+}
+
+/* List-session Prev/Next (built in audio.js; hidden for a single-item play) */
+
+.audio-skip {
+    width: auto;
+    min-width: 6rem;
+    margin-top: 1rem;
+    background: #241B3D;
+    border-color: #C9A6FF;
+    color: #C9A6FF;
+}
+
+.audio-skip:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+.audio-skip.is-inert {
+    opacity: 0.45;
 }
 
 /* Loading / empty / error states */

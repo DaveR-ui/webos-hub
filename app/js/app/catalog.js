@@ -104,6 +104,149 @@ var Michelly = window.Michelly = window.Michelly || {};
         ui().pushBackHandler(fn);
     }
 
+    /* Ordered list playback ("list session"). The catalog owns the list it rendered, so it
+     * also owns the queue: one owner means the advance logic is not duplicated in the two
+     * players and a mixed Audio/Video list cannot leak extra back-stack entries. */
+
+    var listItems = null;
+    var listIndex = -1;
+    var listUserId = null;
+    var listActive = false;
+    var listKind = null;
+
+    function playlistIsActive() {
+        return listActive;
+    }
+
+    function stopCurrentPlayer() {
+        if (listKind === 'audio') {
+            namespace.audio.stop();
+        } else if (listKind === 'video') {
+            namespace.player.stop();
+        }
+
+        listKind = null;
+    }
+
+    // Tears the session down. ui.handleBack() pops a handler *before* invoking it, so the
+    // handler pushed by playlistStart() must not pop again; the direct callers (finish,
+    // auto-advance past the last item) still own the pop.
+    function endSession(popHandler) {
+        if (!listActive) {
+            return;
+        }
+
+        listActive = false;
+        stopCurrentPlayer();
+        listItems = null;
+        listIndex = -1;
+        listUserId = null;
+
+        if (popHandler) {
+            ui().popBackHandler();
+        }
+
+        ui().showView('itemView');
+    }
+
+    // Public teardown (also the playlist's `stop`): ends the session and pops its handler.
+    function playlistEnd() {
+        endSession(true);
+    }
+
+    function playCurrent() {
+        var item = listItems ? listItems[listIndex] : null;
+
+        if (!item) {
+            playlistEnd();
+            return;
+        }
+
+        var kind = item.Type === 'Audio' ? 'audio' : 'video';
+
+        // Mixed list: tear the previous player down before routing to the other one, so
+        // exactly one player (and its progress timer) is alive at a time.
+        if (listKind && listKind !== kind) {
+            stopCurrentPlayer();
+        }
+
+        listKind = kind;
+
+        if (kind === 'audio') {
+            namespace.audio.play(item, listUserId);
+        } else {
+            namespace.player.play(item, listUserId);
+        }
+    }
+
+    function playlistStart(items, index, userId) {
+        if (listActive) {
+            playlistEnd();
+        }
+
+        listItems = items || [];
+        listIndex = (typeof index === 'number' && index >= 0) ? index : 0;
+        listUserId = userId;
+        listActive = true;
+
+        // Exactly one back entry for the whole session: Back stops playback and returns to
+        // #itemView. Auto-advance and next/previous never push or pop a handler.
+        ui().pushBackHandler(function () {
+            endSession(false);
+        });
+
+        playCurrent();
+    }
+
+    // Called by the players' onended while list mode is active. Stop at the last item:
+    // no wrap, no repeat, no shuffle.
+    function playlistAdvance() {
+        if (!listActive) {
+            return false;
+        }
+
+        stopCurrentPlayer();
+
+        if (listIndex + 1 >= listItems.length) {
+            playlistEnd();
+            return false;
+        }
+
+        listIndex++;
+        playCurrent();
+        return true;
+    }
+
+    function playlistHasNext() {
+        return !!listActive && listIndex + 1 < listItems.length;
+    }
+
+    function playlistHasPrevious() {
+        return !!listActive && listIndex > 0;
+    }
+
+    function playlistNext() {
+        if (!listActive || !playlistHasNext()) {
+            return false;
+        }
+
+        stopCurrentPlayer();
+        listIndex++;
+        playCurrent();
+        return true;
+    }
+
+    function playlistPrevious() {
+        if (!listActive || !playlistHasPrevious()) {
+            return false;
+        }
+
+        stopCurrentPlayer();
+        listIndex--;
+        playCurrent();
+        return true;
+    }
+
     function openViews(userId) {
         var browse = document.querySelector('#browseView');
 
@@ -186,7 +329,7 @@ var Michelly = window.Michelly = window.Michelly || {};
                 var backOpts = cloneOpts(opts);
                 backOpts.StartIndex = startIndex;
                 openItems(opts.ParentId, userId, backOpts);
-            });
+            }, items, items.indexOf(item));
         }, 'This folder is empty.');
 
         focusFirstCard(container);
@@ -225,7 +368,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
-    function renderItem(container, item, userId, back) {
+    function renderItem(container, item, userId, back, list, listIndex) {
         ui().clear(container);
 
         var wrapper = ui().el('div', 'item-detail');
@@ -256,7 +399,13 @@ var Michelly = window.Michelly = window.Michelly || {};
         var play = ui().el('button', 'primary', 'Play');
         play.type = 'button';
         play.onclick = function () {
-            if (item.Type === 'Audio') {
+            // A list-opened item plays as an ordered session; a list-less item (series
+            // detail, fallback) keeps the single-item path.
+            if (list && list.length && listIndex >= 0) {
+                var queue = list.slice(0);
+                queue[listIndex] = item;   // the fetched detail is richer than the /Items entry
+                namespace.playlist.start(queue, listIndex, userId);
+            } else if (item.Type === 'Audio') {
                 namespace.audio.play(item, userId);
             } else {
                 namespace.player.play(item, userId);
@@ -288,7 +437,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         focusFirstCard(container);
     }
 
-    function openItem(itemId, userId, back) {
+    function openItem(itemId, userId, back, list, listIndex) {
         var itemView = document.querySelector('#itemView');
 
         setBackHandler(function () {
@@ -303,7 +452,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         ui().showLoading(itemView);
 
         api().getItem(itemId, userId, function (item) {
-            renderItem(itemView, item || {}, userId, back);
+            renderItem(itemView, item || {}, userId, back, list, listIndex);
         }, function (err) {
             ui().showError(itemView, err);
         });
@@ -338,7 +487,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             renderCardList(list, items, function (item) {
                 openItem(item.Id, userId, function () {
                     openEpisodes(seriesId, userId, back);
-                });
+                }, items, items.indexOf(item));
             }, 'No episodes found.');
 
             focusFirstCard(browse);
@@ -372,7 +521,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             renderCardList(list, items, function (item) {
                 openItem(item.Id, userId, function () {
                     openResume(userId);
-                });
+                }, items, items.indexOf(item));
             }, 'Nothing to continue watching.');
 
             focusFirstCard(browse);
@@ -387,5 +536,16 @@ var Michelly = window.Michelly = window.Michelly || {};
         openItem: openItem,
         openEpisodes: openEpisodes,
         openResume: openResume
+    };
+
+    namespace.playlist = {
+        isActive: playlistIsActive,
+        start: playlistStart,
+        advance: playlistAdvance,
+        next: playlistNext,
+        previous: playlistPrevious,
+        hasNext: playlistHasNext,
+        hasPrevious: playlistHasPrevious,
+        stop: playlistEnd
     };
 })(Michelly);
