@@ -192,7 +192,7 @@ var Michelly = window.Michelly = window.Michelly || {};
                 Limit: params.Limit,
                 SortBy: params.SortBy,
                 SortOrder: params.SortOrder,
-                Fields: 'PrimaryImageAspectRatio'
+                Fields: params.Fields || 'PrimaryImageAspectRatio'
             }
         }, success, error);
     }
