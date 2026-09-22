@@ -450,6 +450,9 @@ function afterConnect(baseurl, data) {
 
     Michelly.api.setBaseUrl(current_baseurl);
 
+    // Playlist slots key by server id, exactly like michelly_sessions (see auth.js).
+    Michelly.playlists.setServerId(current_server_id);
+
     var session = Michelly.auth.getSession(current_server_id);
 
     if (session && session.accessToken) {

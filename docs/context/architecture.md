@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback (including ordered list playback), and the bundled Luna discovery service.
-tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, luna, discovery, d-pad, media-server]
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback (ordered-list sessions and user-built saved playlists), and the bundled Luna discovery service.
+tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, luna, discovery, d-pad, media-server]
 version: 2.6
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
@@ -40,7 +40,7 @@ loader — the verified remote payload when reachable, the packaged copies other
 | `frontend/js/app/api.js` | ES5 XHR media-server REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** Remote payload. |
 | `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; the tri-state default user (`michelly_default_user`) for automatic sign-in; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** Remote payload. |
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** Remote payload. |
-| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`). **Fork-only.** Remote payload. |
+| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the saved-playlist store (`michelly_playlists`) and its manage view (`Michelly.playlists`). **Fork-only.** Remote payload. |
 | `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Prev / Play/Pause / Next buttons, time readout, progress bar), play/pause, list-aware auto-advance, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card (Prev / Play/Pause / Next), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow (auto-connect from the stored `baseurl`, session-first + default-user auto-login), the runtime-built default-user settings view, main key/Back handling. Remote payload. |
@@ -218,7 +218,8 @@ exposes `GET /System/Ping` (plain text `Jellyfin Server`) and, since 10.7, `GET 
 `frontend/js/app/catalog.js` drives the single `#browseView` and `#itemView`:
 
 - `openViews(userId)` — `GET /Users/{userId}/Views` renders one card per library plus a **Continue
-  Watching** button.
+  Watching** and a **Playlists** button (the latter opens the saved-playlist manage view — see
+  [Saved playlists](#saved-playlists-michellyplaylists)).
 - `openItems(parentId, …)` — `GET /Items` with paging (`DEFAULT_LIMIT` 60) and Previous/Next buttons.
 - `openItem(itemId, …)` — `GET /Users/{userId}/Items/{itemId}` renders poster, overview, **Play**, and an
   **Episodes** button when `Type === 'Series'`.
@@ -371,6 +372,80 @@ silently fails, which would make the D-pad appear stuck. The buttons stay focusa
 a boundary. The overlay/card itself stays **always visible**.
 
 
+#### Saved playlists (`Michelly.playlists`)
+
+Users build up to **three preset playlist slots** on the TV ("Playlist 1/2/3" — fixed names, no
+rename, no user typing) and replay them through the session model above. `frontend/js/app/catalog.js`
+owns the store, the add-from-item picker and the manage view; there is **no** `api.js` call —
+server-side playlists are out of scope, the store is fork-owned and TV-only.
+
+**Store (`michelly_playlists`, per-server).** The `localStorage` key maps the server **id** (wired
+per connect — see **Keying** below) to `{ slots: [ [entry…], [], [] ] }` — exactly three arrays. An
+entry carries
+only what the row renderer and the audio player need: `{Id, Type, Name, ImageTags?{Primary}}`. Only
+`Type === 'Audio'` items are addable — the picker is rendered on audio items only, and
+`normalizeSlots` drops any non-Audio entry on read, so a foreign entry can never misroute to the
+video player. Duplicate adds are guarded by `Id` (`addToSlot` returns `'added'` / `'duplicate'` /
+`'error'`). Corruption is isolated **per key**: a missing/corrupt record for one server resets only
+that server's slots (a malformed top-level blob counts as an empty store). A failed write (quota /
+disabled storage) returns `false` and every caller surfaces `Could not save the playlist.` — never
+silent. **Keying:** identical to `michelly_sessions` — the `System/Info/Public` `Id`, set once per
+connect by `afterConnect` in `frontend/js/index.js` through `Michelly.playlists.setServerId(id)`.
+The stable server Id wins over the address: **address/port changes no longer orphan the slots**;
+orphaning needs the server's own Id to change (reinstall/reset) — the same lifetime as the session
+store. This replaced the original baseUrl keying **pre-publish**, so no migration shim is needed or
+shipped — no device ever held baseUrl-keyed data. Without a wired id (before `afterConnect`, or a
+server reporting no Id), reads behave like absent data (fresh empty slots) and writes fail like a
+storage error — a falsy `''` key is never persisted.
+
+**Public surface.** `Michelly.playlists` — `setServerId(id)` (the store key, wired once per
+connect), `listSlots()` (`[{name, count}]` for this server),
+`getSlotItems(i)` (a copy, never a live reference into storage), `addToSlot(i, item)`,
+`removeAt(i, position)`, `clearSlot(i)` — is the storage surface only, distinct from
+`Michelly.playlist` (the session API above, still catalog-owned). The manage view reads through
+`playlists` and plays through `playlist.start`.
+
+**Add from the item view.** `renderItem` renders **Add to playlist** right after Play for
+`Type === 'Audio'` items only; grouped music browse reaches it because those cards route through the
+same `openItem(…, list, listIndex)` → `renderItem` path. The button toggles an inline slot picker
+(three slot buttons with live counts + Cancel) and pushes **exactly one** back handler while open —
+same convention as the session handler (`ui.handleBack()` pops before invoking, so the pushed handler
+does not pop; the on-screen choice, Cancel or a toggle press pops it, and a **Play** press closes an
+open picker first, so a session never starts over a stacked handler). Picker buttons are real
+`<button>`s and are **never disabled**. The outcome (`Added to …` / `Already in …` /
+`Could not save the playlist.`) shows in the item view's inline `.playlist-status` line.
+
+**Manage view (`#playlistsView`).** Runtime-built on the `ensureSettingsView` pattern —
+`ensurePlaylistsView()` appends a `<div class="view">` to `<body>`, so the shell `index.html` is
+untouched and the view ships in the payload. Entry point: the **Playlists** button in the Views
+header, beside Continue Watching. The slot list shows the three slots with counts; per slot **Play**
+and **Clear** (Clear arms a two-step inline Yes/No confirm), and a slot detail (per-track **Remove**
++ on-screen **Back**) is a lower level of the same view with one pushed back handler, so hardware
+Back returns to the slot list. Empty-slot Play/Clear no-op with a status line — the buttons stay
+focusable and are never `disabled` (the same D-pad rule as Prev/Next). **Reorder is deferred** — not
+in v1.
+
+**Session-core change (the one load-bearing edit).** `Michelly.playlist.start(items, index, userId,
+returnTarget)` gained an optional 4th argument — a view-id string **or** a function; when omitted
+(every existing caller) `endSession()` keeps the historical `showView('itemView')`, byte-identical.
+`endSession()` honours the target and clears it on teardown. The single-owner back-stack invariant,
+stop-at-last and the stop-on-failure policy above are **unchanged**. Manage-play passes a function —
+re-render the manage view, then arm the mirror below — as the target, so a playlist that ends
+(naturally, on Back, or on a failed item) returns to the manage view.
+
+**Never-silent for manage-play.** The players end a failing session by calling `stop()` /
+`finish()` **first** (which runs the return target and lands on the manage view) and write their
+message to `#itemError` **after**, so the failure would otherwise sit on the hidden `#itemView`. The
+return target arms a deferred **one-tick** check (`setTimeout(0)`, after the player's synchronous
+continuation): a non-empty `#itemError` text is mirrored into the manage view's status line; if the
+player instead re-showed `#itemView` after the stop (the failed-`PlaybackInfo` path, which strands
+the user on a shell `renderItem` never filled this launch), the tick restores the manage view and
+surfaces the message there. Guards: the armed flag distinguishes the post-stop hijack from any legit
+manage end, the placeholder `\u00a0` trims to empty so normal-end/Back no-op, and `#itemError` is a
+foreign node — the mirror never writes or clears it. Because `renderItem` creates `#itemError`
+lazily, `ensureItemErrorSlot()` pre-creates it, so a fresh launch (Playlists → Play without ever
+opening an item) cannot silently discard the message.
+
 #### Audio playback
 
 Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio.js`:
@@ -410,12 +485,14 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
   support is Chrome 56+, and the app direct-streams, so a flac item fails to play. See
   [webos-3-compatibility](webos-3-compatibility.md#audio-codec-reality-on-chromium-38).
 
-**Deployment status (important).** The audio player and the thin loader are **not yet in the published
-IPK or the `gh-pages` bundle** — that work is **uncommitted** in the working tree. A TV running the
-published `1.3.3` IPK therefore has **no audio player at all**: audio items cannot be played until the
-work is committed, the remote bundle regenerated (`npm run bundle`) and republished (and the IPK
-rebuilt for the shell/loader). The video overlay in `frontend/js/app/player.js` ships the same way —
-it reaches the TV only through a regenerated and published payload.
+**Deployment status (important).** The audio player, the video overlay, the ordered-list session and
+the thin loader are all **committed on `master`**. Payload files reach the TV only through the
+regenerated bundle — CI runs `npm run bundle` and publishes `app/` to `gh-pages` on every `master`
+push (see [thin loader / remote bundle](#thin-loader--remote-bundle)); local-shell changes reach it
+only through a new IPK via the manual HBC refresh. The saved-playlists feature (`Michelly.playlists`,
+`#playlistsView`) **ships with this change**: it touches payload files only
+(`js/app/catalog.js`, `js/index.js`, `css/app.css`), so it goes live on the TV's next launch after
+this commit's CI publish — **no IPK rebuild**.
 
 **Deferred / pending device logs:** narrowing `DirectPlayProfiles` (A5 — make the server-side profile
 match the TV's real codecs) and the reported **video black-screen** defect are **not** part of this
@@ -483,6 +560,7 @@ focused (`isButtonFocused`), so the two paths cannot both fire.
 | `connected_servers` | LRU map (max 4) of `{baseurl, Address, auto_connect, id, Name}` keyed by server id. |
 | `michelly_sessions` | Per-server auth session `{userId, accessToken, userName}` keyed by server id. |
 | `michelly_default_user` | Default credential for automatic sign-in: **absent** = built-in `pepe`/`pepe`; `{username, password}` = custom (**plaintext**); `{disabled: true}` = auto-login off. |
+| `michelly_playlists` | Per-server saved-playlist slots `{slots:[[…],[…],[…]]}` keyed by server id (like `michelly_sessions`): exactly three preset slots, Audio-only entries `{Id, Type, Name, ImageTags?}` (see [Saved playlists](#saved-playlists-michellyplaylists)). |
 
 The LRU map is written only on a successful connect (`handleSuccessServerInfo`). A failed connect
 leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence log
