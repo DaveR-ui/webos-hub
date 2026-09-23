@@ -180,6 +180,10 @@ var Michelly = window.Michelly = window.Michelly || {};
         return request('GET', '/Users/' + encodeURIComponent(userId) + '/Views', null, success, error);
     }
 
+    // Artist-centric browsing passes a few extra query params through /Items. Filters is a
+    // comma-delimited list of server-side item filters (e.g. 'IsFavorite', or
+    // 'IsFavorite,IsPlayed'); ChildCount is a valid Fields token (a caller requesting it gets
+    // the direct child count alongside PrimaryImageAspectRatio).
     function getItems(params, success, error) {
         params = params || {};
 
@@ -192,6 +196,13 @@ var Michelly = window.Michelly = window.Michelly || {};
                 Limit: params.Limit,
                 SortBy: params.SortBy,
                 SortOrder: params.SortOrder,
+                UserId: params.UserId,
+                Filters: params.Filters,
+                IsFavorite: params.IsFavorite,
+                SearchTerm: params.SearchTerm,
+                ArtistIds: params.ArtistIds,
+                AlbumArtistIds: params.AlbumArtistIds,
+                ExcludeItemTypes: params.ExcludeItemTypes,
                 Fields: params.Fields || 'PrimaryImageAspectRatio'
             }
         }, success, error);

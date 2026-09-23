@@ -979,3 +979,358 @@
 #playlistsView .playlist-status {
     max-width: 48rem;
 }
+
+/* Music browse (artist-centric UI, built in catalog.js). Flexbox only (Chromium 38) - no CSS grid, no gap, no custom properties. */
+
+/* The shell keeps .view's display:none / .view.active's display:flex untouched; only the
+ * inner axis and the background are set here. */
+#musicView,
+#artistView {
+    -webkit-flex-direction: row;
+    flex-direction: row;
+    overflow: hidden;
+    background: #1A0F33;
+}
+
+/* Static, non-tabbable side rail (plain div/span children only). 16rem plus border-box keeps it
+ * from pushing the main column off a narrow/short TV; it has no fixed height. */
+.music-rail {
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    width: 16rem;
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+    padding: 1.5rem 1rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: #1A0F33;
+    border-right: 2px solid #3A2E5C;
+}
+
+.music-rail-brand {
+    margin-bottom: 1.4rem;
+    font-size: 1.1em;
+    font-weight: bold;
+    color: #C9A6FF;
+}
+
+.music-rail-nav-item {
+    margin-bottom: 0.4rem;
+    padding: 0.5rem 0.8rem;
+    border-radius: 0.6rem;
+    color: #A99FC4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.music-rail-note {
+    margin-top: auto;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.6em;
+    color: #A99FC4;
+}
+
+/* Main column: the scroll container. min-width/min-height: 0 are required or the flex child
+ * cannot scroll inside its parent on Chromium 38 (same class of fix as the grouped-browse note). */
+.music-main {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1.5rem 2rem;
+}
+
+.music-topbar {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-bottom: 1rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 2px solid #3A2E5C;
+}
+
+.music-back {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    margin-right: 0.8rem;
+    background: transparent;
+    border-color: #C9A6FF;
+    color: #C9A6FF;
+}
+
+.music-back:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+.music-title {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.2em;
+    color: #F3EFFA;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Static, non-interactive search surface (a div, never a button): no :focus rule and a default
+ * cursor, so it can never look focusable. */
+.music-search {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 28rem;
+    margin-left: 0.8rem;
+    padding: 0.4rem 1rem;
+    background: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 1.2rem;
+    color: #A99FC4;
+    cursor: default;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.music-chips {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: center;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.music-chip {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    margin: 0.2rem 0.5rem 0.2rem 0;
+    padding: 0.35rem 1rem;
+    background: transparent;
+    border: 2px solid #C9A6FF;
+    border-radius: 1.2rem;
+    color: #C9A6FF;
+}
+
+.music-chip.is-active {
+    background: #C9A6FF;
+    border-color: #C9A6FF;
+    color: #1A0F33;
+}
+
+/* Placed after .is-active so a focused active chip still reads as focused (equal specificity). */
+.music-chip:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+.music-content {
+    display: block;
+    width: 100%;
+}
+
+/* Shelf reuses the .folder-section display:block pattern; .card-list supplies the wrapped grid.
+ * .music-grid is self-sufficient too, so it works whether or not .card-list is also applied. */
+.music-shelf {
+    display: block;
+    width: 100%;
+    margin-bottom: 1.4rem;
+}
+
+.music-grid {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-justify-content: flex-start;
+    justify-content: flex-start;
+    -webkit-align-content: flex-start;
+    align-content: flex-start;
+    width: 100%;
+}
+
+/* Artist card: a square, circular poster instead of the default 150% portrait. The circular
+ * mask lives on the poster container, so the absolutely-positioned img/.img-fallback is clipped. */
+.card-artist .card-poster {
+    padding-top: 100%;
+    border-bottom: 0;
+    border-radius: 50%;
+    overflow: hidden;
+}
+
+.card-artist .card-title,
+.card-artist .card-sub {
+    text-align: center;
+}
+
+.music-section {
+    display: block;
+    width: 100%;
+    margin-bottom: 1.4rem;
+}
+
+.music-section-head {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid #3A2E5C;
+}
+
+.music-section-title {
+    margin: 0;
+    font-size: 1.05em;
+    font-weight: bold;
+    color: #C9A6FF;
+}
+
+.music-section-count {
+    margin-left: auto;
+    padding-left: 0.6rem;
+    font-size: 0.6em;
+    color: #A99FC4;
+}
+
+/* Album row mirrors the .playlist-row surface. */
+.music-row {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: center;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.6rem;
+}
+
+/* Buttons inside a row are inline, so they must drop the shell's width: 100%. */
+.music-row button {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    margin: 0.2rem 0 0.2rem 0.6rem;
+}
+
+/* Primary navigation target: absorbs the free space (higher specificity than .music-row button)
+ * and carries a .card-like focus ring. */
+.music-row .music-row-thumb {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    background: #2E2350;
+    border-color: #3A2E5C;
+    color: #F3EFFA;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.music-row-thumb img {
+    display: inline-block;
+    vertical-align: middle;
+    width: 3.5rem;
+    height: 3.5rem;
+    margin-right: 0.6rem;
+    -o-object-fit: cover;
+    object-fit: cover;
+    border-radius: 0.3rem;
+    background: #241B3D;
+}
+
+/* Album-row title span beside the thumbnail; the button owns the nowrap/ellipsis, this only
+ * aligns the text with the fixed-height image. */
+.music-row-title {
+    vertical-align: middle;
+}
+
+.music-row-thumb:focus {
+    background: #2E2350;
+    border-color: #C9A6FF;
+    color: #F3EFFA;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 2px;
+}
+
+.music-play-btn {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    min-width: 6rem;
+    background: #C9A6FF;
+    border-color: #C9A6FF;
+    color: #1A0F33;
+}
+
+.music-play-btn:focus {
+    background: #DCC5FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+.music-play-btn.is-inert {
+    opacity: 0.45;
+}
+
+.music-empty {
+    width: 100%;
+    margin: 0.2rem 0 0.6rem 0;
+    font-size: 0.7em;
+    color: #A99FC4;
+}
+
+/* Non-tabbable status line inside the music shell; mirrors the .playlist-status surface and is
+ * hidden while empty (catalog.js also toggles style.display). No :focus rule - it is never a target. */
+.music-status {
+    width: 100%;
+    max-width: 48rem;
+    margin: 0.4rem 0 0 0;
+    padding: 0.35em 0.6em;
+    color: #C9A6FF;
+    background-color: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.4rem;
+    font-size: 0.6em;
+    word-wrap: break-word;
+}
+
+.music-status:empty {
+    display: none;
+}
