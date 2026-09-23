@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-22
+last_updated: 2026-09-23
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist]
@@ -258,9 +258,29 @@ On-device test checklist for the target webOS 3.0 TV:
       the audio card (`#audioPrev`/`#audioNext`); OK on either moves the list; at the first/last item
       the control stays focusable but is **dimmed** (`is-inert`) and does nothing — it is never
       `disabled`, and focus must not appear stuck.
-- [ ] Playback of the **last** item ends the session and returns to `#itemView` (no wrap/repeat/shuffle).
-- [ ] A **single item** with no list context still plays exactly as before: the Prev/Next controls are
-      hidden and Back behaves normally.
+- [ ] Playback of the **last** item ends the session and returns to `#itemView` **with modes at
+      default** (repeat off, shuffle off).
+- [ ] Repeat **All** wraps at the pass end into a fresh pass; **Next** stays bright (not dimmed) at
+      the last item because the wrap is a real action.
+- [ ] Repeat **One** replays the current track on auto-advance only; a manual **Next** still
+      advances; while repeat-one is on the queue is **not** consumed (starved queue — documented
+      limitation).
+- [ ] Shuffle plays only not-yet-heard tracks of the pass (already-heard ones rejoin at the wrap);
+      toggling it **Off** resumes natural order at the current track followed by the pass's
+      ascending not-yet-played remainder — never replays a heard track, never strands an unheard
+      one; the Prev-then-Next walk-back is unchanged.
+- [ ] Shuffle **On → Off after a wrap**: the wrap reset the visited set, so pass-1-heard tracks
+      are eligible again — the pass-2 Off rebuild must not strand them.
+- [ ] With the queue overlay open, an auto-advance folds it (its back handler pops on the card
+      rebuild) and the next **single** Back reaches the session — never a dead press; teardown order
+      stays LIFO (overlay entry pops before the session entry).
+- [ ] Pre-session queue: the **More** menu's 'Play next'/'Add to queue' fill the pending queue, and
+      it is adopted **only** by the next all-audio session start — a video/mixed list must **not**
+      adopt it, a server switch clears it, and a session end leaves it intact.
+- [ ] The **More** menu (actions step / slot-picker step) owns exactly **one** back handler — one
+      Back closes it from either step; a **Play** press closes an open menu first.
+- [ ] A **single item** with no list context still plays exactly as before: every session-scoped
+      control (Prev/Next, Repeat, Shuffle, Queue) is hidden and Back behaves normally.
 - [ ] Back during a list session stops playback and returns to `#itemView` on **one** press (the
       playlist owns a single back entry); a subsequent Back leaves the item view as before.
 - [ ] A list item whose stream errors **ends the list** after the failed item (it must not

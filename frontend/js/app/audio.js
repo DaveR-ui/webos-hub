@@ -22,6 +22,24 @@ var Michelly = window.Michelly = window.Michelly || {};
     // matching /Sessions/Playing/Stopped when a Playing actually went out.
     var sourceLoaded = false;
 
+    // Queue-overlay UI state. The overlay pushes exactly one back handler while open
+    // (same discipline as the item-view slot picker in catalog.js). It exists only while
+    // a list session is active: the mode controls are hidden for a single-item play, so
+    // the overlay can never be opened there. It never survives a card rebuild — play()
+    // rebuilds the now-playing card with the overlay closed by default.
+    //
+    // OWNERSHIP INVARIANT: this flag survives a WHOLESALE back-stack replacement
+    // (setBackHandler -> clearBackHandlers), not just a pop. No reachable surface does
+    // that while the overlay could be open today (#audioView's only tabbables are the
+    // card buttons and nothing there calls setBackHandler), but the render fold makes a
+    // stale true flag destructive: renderNowPlaying() would pop an entry the overlay no
+    // longer owns. RULE for any future surface that replaces the back stack (view
+    // navigation, a new modal, anything calling setBackHandler) while the overlay could
+    // be open: it MUST reset queueOverlayOpen = false WITHOUT popping — the overlay's
+    // entry is already gone with the stack it lived on, and popping would steal a live
+    // entry belonging to someone else.
+    var queueOverlayOpen = false;
+
     function ui() {
         return namespace.ui;
     }
@@ -162,6 +180,17 @@ var Michelly = window.Michelly = window.Michelly || {};
         stopProgressTimer();
         clearAudio();
 
+        // If the queue overlay was open, its back entry sits above the playlist's own
+        // one. The playlist teardown that reaches this stop pops the session handler
+        // right after, so the overlay's entry must go first — otherwise the next Back
+        // would consume a dead session entry instead of the item view's handler
+        // (the "exactly one pop per Back" invariant). Popping the overlay's own entry
+        // here is safe: it was pushed on open and can only still be on the stack while
+        // this audio session is the active view.
+        if (queueOverlayOpen) {
+            closeQueueOverlay(true, false);
+        }
+
         // Only post Stopped for an item whose Playing was actually posted; otherwise this
         // is a phantom stop for something that never started.
         if (sourceLoaded) {
@@ -233,6 +262,11 @@ var Michelly = window.Michelly = window.Michelly || {};
     // `disabled` attribute — navigate() in index.js includes any element with
     // offsetWidth > 0 && offsetHeight > 0, and .focus() on a disabled button silently
     // fails, which would make the D-pad appear stuck.
+    //
+    // NOTE (teardown discipline): this function intentionally contains NO overlay fold for
+    // an ended session. Every inactive pop is owned by stop() (its queueOverlayOpen branch
+    // pops the overlay's entry before the session teardown pops the session entry), so an
+    // updateListControls() call after a teardown never pops anything.
     function updateListControls() {
         var playlist = namespace.playlist;
         var active = !!(playlist && playlist.isActive());
@@ -248,6 +282,202 @@ var Michelly = window.Michelly = window.Michelly || {};
             next.style.display = active ? '' : 'none';
             next.className = (active && !playlist.hasNext()) ? 'audio-skip is-inert' : 'audio-skip';
         }
+
+        // Playback-mode controls share Prev/Next's gate: hidden entirely for a
+        // single-item play (that D-pad walk is unchanged), always focusable while a
+        // session is active (a mode press is never a no-op). Never disabled.
+        var repeat = document.querySelector('#audioRepeat');
+
+        if (repeat) {
+            repeat.style.display = active ? '' : 'none';
+            repeat.className = 'audio-skip audio-mode';
+            repeat.textContent = 'Repeat: ' + repeatLabel(active ? playlist.getRepeat() : 'off');
+        }
+
+        var shuffle = document.querySelector('#audioShuffle');
+
+        if (shuffle) {
+            shuffle.style.display = active ? '' : 'none';
+            shuffle.className = 'audio-skip audio-mode';
+            shuffle.textContent = 'Shuffle: ' + (active && playlist.isShuffle() ? 'On' : 'Off');
+        }
+
+        // One getQueue() call: it returns a fresh copy each time, so repeating the call
+        // would make the label read two different slices. Inactive → 0 (no session, no
+        // live queue; the card is a session-driven surface regardless).
+        var queueBtn = document.querySelector('#audioQueueBtn');
+        var q = active ? playlist.getQueue() : [];
+
+        if (queueBtn) {
+            queueBtn.style.display = active ? '' : 'none';
+            queueBtn.className = 'audio-skip audio-mode';
+            queueBtn.textContent = 'Queue: ' + q.length;
+        }
+
+        var queueBox = document.querySelector('#audioQueue');
+
+        if (queueBox && !active) {
+            queueBox.style.display = 'none';
+        }
+    }
+
+    function repeatLabel(mode) {
+        if (mode === 'all') {
+            return 'All';
+        }
+
+        if (mode === 'one') {
+            return 'One';
+        }
+
+        return 'Off';
+    }
+
+    // repeat off -> all -> one -> off, one step per press.
+    function cycleRepeat() {
+        var playlist = namespace.playlist;
+
+        if (!playlist || !playlist.isActive()) {
+            return;
+        }
+
+        var mode = playlist.setRepeat(
+            playlist.getRepeat() === 'off' ? 'all' : (playlist.getRepeat() === 'all' ? 'one' : 'off')
+        );
+
+        var button = document.querySelector('#audioRepeat');
+
+        if (button) {
+            button.textContent = 'Repeat: ' + repeatLabel(mode);
+        }
+
+        updateListControls();
+    }
+
+    function toggleShuffle() {
+        var playlist = namespace.playlist;
+
+        if (!playlist || !playlist.isActive()) {
+            return;
+        }
+
+        playlist.setShuffle(!playlist.isShuffle());
+
+        var button = document.querySelector('#audioShuffle');
+
+        if (button) {
+            button.textContent = 'Shuffle: ' + (playlist.isShuffle() ? 'On' : 'Off');
+        }
+
+        updateListControls();
+    }
+
+    /* Queue overlay (visible surface of the session queue). Rows are non-tabbable divs
+     * in play order, head first. Renderer reads the live queue from the playlist owner
+     * (catalog.js); called on open and after any UI mutation of the queue. */
+
+    function renderQueueRows() {
+        var playlist = namespace.playlist;
+        var items = (playlist && playlist.isActive()) ? playlist.getQueue() : [];
+        var box = document.querySelector('#audioQueue');
+
+        if (!box) {
+            return;
+        }
+
+        var rows = box.querySelector('.audio-queue-rows');
+
+        if (!rows) {
+            return;
+        }
+
+        ui().clear(rows);
+
+        if (!items.length) {
+            rows.appendChild(ui().el('div', 'audio-queue-empty', 'Queue is empty'));
+        } else {
+            for (var i = 0; i < items.length; i++) {
+                rows.appendChild(ui().el('div', 'audio-queue-row', items[i].Name || 'Untitled'));
+            }
+        }
+
+        var clearBtn = box.querySelector('#audioQueueClear');
+
+        if (clearBtn) {
+            clearBtn.className = items.length ? 'audio-skip' : 'audio-skip is-inert';
+        }
+    }
+
+    function openQueueOverlay() {
+        var box = document.querySelector('#audioQueue');
+
+        if (!box || queueOverlayOpen) {
+            return;
+        }
+
+        queueOverlayOpen = true;
+        renderQueueRows();
+        box.style.display = '';
+
+        // Exactly one back entry while the overlay is open. handleBack() pops before
+        // invoking, so the pushed handler must not pop (mirrors the slot-picker
+        // convention in catalog.js); on-screen Close/Clear actions own the pop.
+        ui().pushBackHandler(function () {
+            closeQueueOverlay(false, true);
+        });
+
+        var first = box.querySelector('button');
+
+        if (first) {
+            first.focus();
+        }
+    }
+
+    // popHandler: on-screen close buttons pop their own entry; the pushed back handler
+    // (hardware Back) does not, because handleBack already popped it. refocus returns
+    // the pointer anchor to the Queue toggle so the D-pad walk stays predictable.
+    function closeQueueOverlay(popHandler, refocus) {
+        queueOverlayOpen = false;
+
+        if (popHandler) {
+            ui().popBackHandler();
+        }
+
+        var box = document.querySelector('#audioQueue');
+
+        if (box) {
+            box.style.display = 'none';
+        }
+
+        if (refocus) {
+            var queueBtn = document.querySelector('#audioQueueBtn');
+
+            if (queueBtn) {
+                queueBtn.focus();
+            }
+        }
+    }
+
+    function toggleQueueOverlay() {
+        if (queueOverlayOpen) {
+            closeQueueOverlay(true, true);
+            return;
+        }
+
+        openQueueOverlay();
+    }
+
+    function clearQueueFromUi() {
+        var playlist = namespace.playlist;
+
+        if (playlist && playlist.isActive()) {
+            playlist.clearQueue();
+        }
+
+        // Rows re-render and the Queue: n label follows; the overlay stays open and
+        // still owns its back entry, so hardware Back keeps closing the overlay first.
+        renderQueueRows();
+        updateListControls();
     }
 
     // True when focus is on a <button> inside the given view. Such a control handles
@@ -299,6 +529,17 @@ var Michelly = window.Michelly = window.Michelly || {};
 
         if (!view) {
             return;
+        }
+
+        // A rebuild replaces the .audio-now node the overlay lives in. If the overlay is
+        // still open here (auto-advance or Next started a new play), the old node dies but
+        // its pushed back entry would survive it — leaving a live handler whose widget is
+        // gone, so the next hardware Back would eat a dead press. Fold the overlay NOW,
+        // popping the entry the destroyed node owned (pop=true; no refocus needed — play()
+        // seeds focus on the fresh card right after). This also keeps stop()'s own
+        // queueOverlayOpen fold idempotent: the flag is false by the time it runs.
+        if (queueOverlayOpen) {
+            closeQueueOverlay(true, false);
         }
 
         var existing = view.querySelector('.audio-now');
@@ -404,6 +645,126 @@ var Michelly = window.Michelly = window.Michelly || {};
             namespace.playlist.next();
         };
         card.appendChild(next);
+
+        var repeatBtn = ui().el('button', 'audio-skip audio-mode', 'Repeat: Off');
+        repeatBtn.id = 'audioRepeat';
+        repeatBtn.type = 'button';
+        repeatBtn.tabIndex = 0;
+        // Same explicit OK/Space handling as the toggle/skip buttons: act on keydown and
+        // suppress the synthetic click so a synthesizing platform cannot double-fire.
+        repeatBtn.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                cycleRepeat();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        repeatBtn.onclick = function () {
+            cycleRepeat();
+            return false;
+        };
+        card.appendChild(repeatBtn);
+
+        var shuffleBtn = ui().el('button', 'audio-skip audio-mode', 'Shuffle: Off');
+        shuffleBtn.id = 'audioShuffle';
+        shuffleBtn.type = 'button';
+        shuffleBtn.tabIndex = 0;
+        shuffleBtn.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                toggleShuffle();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        shuffleBtn.onclick = function () {
+            toggleShuffle();
+            return false;
+        };
+        card.appendChild(shuffleBtn);
+
+        var queueBtn = ui().el('button', 'audio-skip audio-mode', 'Queue: 0');
+        queueBtn.id = 'audioQueueBtn';
+        queueBtn.type = 'button';
+        queueBtn.tabIndex = 0;
+        queueBtn.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                toggleQueueOverlay();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        queueBtn.onclick = function () {
+            toggleQueueOverlay();
+            return false;
+        };
+        card.appendChild(queueBtn);
+
+        // Queue overlay container: built once per card, hidden by default. Overlay state
+        // does not survive a card rebuild — play() always rebuilds with it closed, which
+        // is the documented behaviour (rows re-render on open instead of being kept).
+        var queueBox = ui().el('div', 'audio-queue');
+        queueBox.id = 'audioQueue';
+        queueBox.style.display = 'none';
+
+        var queueRows = ui().el('div', 'audio-queue-rows');
+        queueBox.appendChild(queueRows);
+
+        var clearBtn = ui().el('button', 'audio-skip', 'Clear queue');
+        clearBtn.id = 'audioQueueClear';
+        clearBtn.type = 'button';
+        clearBtn.tabIndex = 0;
+        clearBtn.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                clearQueueFromUi();
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        clearBtn.onclick = function () {
+            clearQueueFromUi();
+            return false;
+        };
+        queueBox.appendChild(clearBtn);
+
+        var closeBtn = ui().el('button', 'audio-skip', 'Close');
+        closeBtn.type = 'button';
+        closeBtn.tabIndex = 0;
+        // On-screen close buttons pop the overlay's own back entry (pick off the picker
+        // convention in catalog.js: a pushed handler must not pop, an on-screen close pops).
+        closeBtn.onkeydown = function (keyEvent) {
+            var key = keyEvent || window.event;
+
+            if (key.keyCode === 13 || key.keyCode === 32) {
+                closeQueueOverlay(true, true);
+                if (key.preventDefault) {
+                    key.preventDefault();
+                }
+                return false;
+            }
+        };
+        closeBtn.onclick = function () {
+            closeQueueOverlay(true, true);
+            return false;
+        };
+        queueBox.appendChild(closeBtn);
+
+        card.appendChild(queueBox);
 
         view.appendChild(card);
 

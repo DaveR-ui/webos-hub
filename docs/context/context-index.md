@@ -1,10 +1,10 @@
 ---
-last_updated: 2026-09-22
+last_updated: 2026-09-23
 status: active
 description: Hub for the docs/context folder of the webOS media client fork — what belongs here, every file it holds, and what lives elsewhere.
 tags: [hub, context, index, thin-loader, remote-bundle]
-version: 1.5
-related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
+version: 1.6
+related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan, aimp-design-reference]
 ---
 
 # Context Index
@@ -39,6 +39,9 @@ touches source.
   policy, upstream sync and the divergence log.
 - [hbc-distribution-plan.md](hbc-distribution-plan.md) — approved custom Homebrew Channel repository
   distribution plan and the remote app bundle under `app/`.
+- [aimp-design-reference.md](aimp-design-reference.md) — design-reference mining AIMP6 for transferable
+  IA/state models (library, playlist/queue, shell) mapped against MiChelly with feasibility verdicts;
+  Tier 1 landed, Tiers 2–3 awaiting approval.
 - [README.md](README.md) — compatibility pointer; the operating agent system resolves this path as
   the folder index.
 - [context-index.md](context-index.md) — this hub.

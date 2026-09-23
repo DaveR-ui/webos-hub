@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-22
+last_updated: 2026-09-23
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse), native playback (ordered-list sessions and user-built saved playlists), and the bundled Luna discovery service.
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse), native playback (ordered-list sessions with playback modes and an in-memory queue, and user-built saved playlists), and the bundled Luna discovery service.
 tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, music, artist, luna, discovery, d-pad, media-server]
 version: 2.7
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
@@ -42,7 +42,7 @@ loader — the verified remote payload when reachable, the packaged copies other
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** Remote payload. |
 | `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the saved-playlist store (`michelly_playlists`) and its manage view (`Michelly.playlists`). **Fork-only.** Remote payload. |
 | `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Prev / Play/Pause / Next buttons, time readout, progress bar), play/pause, list-aware auto-advance, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
-| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card (Prev / Play/Pause / Next), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
+| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card (Prev / Play/Pause / Next + session-scoped Repeat / Shuffle / Queue controls with the inline queue overlay), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow (auto-connect from the stored `baseurl`, session-first + default-user auto-login), the runtime-built default-user settings view, main key/Back handling. Remote payload. |
 | `frontend/css/main.css` | Picker and shared control styling. |
 | `frontend/css/app.css` | Native view / catalog / player / audio now-playing styling (flexbox only). **Fork-only.** Remote payload. |
@@ -382,16 +382,28 @@ the overlay button instead.
 #### Ordered list playback (`Michelly.playlist`)
 
 Playing the list the user just opened plays it **in order**: the item auto-advances on `ended`, the
-D-pad reaches **Prev**/**Next**, and the session **stops after the last item** (no wrap, no repeat, no
-shuffle). A single item opened with **no** list context behaves exactly as before.
+D-pad reaches **Prev**/**Next**, and the session **stops after the last item**. Playback **modes**
+(repeat / shuffle) and a **queue** sit on top of that walk as session state; at their defaults
+(repeat `'off'`, shuffle off, empty queues) the behaviour is byte-identical to the historical
+strictly-in-order walk — stop at the last item, boundary no-ops, and Prev walking back past the tapped
+start. A single item opened with **no** list context behaves exactly as before.
 
 **The catalog owns the session.** `frontend/js/app/catalog.js` already renders the list and already
 routes `Type === 'Audio'` to the audio player, so it also owns the queue: it exposes
 `Michelly.playlist` (`isActive`, `start`, `advance`, `next`, `previous`, `hasNext`, `hasPrevious`,
-`stop`) next to `Michelly.catalog`. One owner means the advance logic is **not** duplicated in the two
+`stop`, `getRepeat`, `setRepeat`, `isShuffle`, `setShuffle`, `getQueue`, `playNext`, `appendQueue`,
+`clearQueue`) next to `Michelly.catalog`. `getQueue()` returns a **copy** of whichever queue is
+visible (live session → session queue, otherwise the pending queue) — callers can never mutate the
+live queue through it. `playNext`/`appendQueue` enqueue and return the resulting **combined** depth
+(session + pending; a falsy-0 also reads falsy for old boolean-expecting callers); `clearQueue`
+returns nothing meaningful. One owner means the advance logic is **not** duplicated in the two
 players and a mixed Audio/Video list cannot leak extra back-stack entries. The session state lives in
 the module-level `listItems`, `listIndex`, `listUserId`, `listActive` and `listKind`
-(`'video'`/`'audio'`/`null`) variables.
+(`'video'`/`'audio'`/`null`) variables, plus the mode/queue state: `playOrder`/`orderPos` (the visit
+order and walk pointer), `listRepeatMode`/`listShuffle`, `currentItem` (the item actually playing —
+a queue entry may not live in `listItems`), `passVisited` (the current pass's visited set — which
+original indices were heard, via the walk or an Id-matched queue entry),
+`listQueue` (session) and `pendingQueue` (pre-session).
 
 **The list is captured at list-render time.** `renderItemsView`, `openEpisodes` and `openResume` pass
 the items array and the tapped index (`items.indexOf(item)`) through `openItem(itemId, userId, back,
@@ -405,7 +417,8 @@ if (list && list.length && listIndex >= 0) {
 }
 ```
 
-The queue is a copy of the rendered page with the fetched item detail substituted at the tapped index.
+The captured list is a copy of the rendered page with the fetched item detail substituted at the
+tapped index (a distinct concept from the in-memory playback queues below).
 The Series-detail **Episodes** button and the `openItem(seriesId, userId)` fallback keep the
 **no-list** path, so they remain single-item.
 
@@ -439,14 +452,52 @@ interrupted (`Back`) item still posts exactly one Stopped, because its `Playing`
 `sourceLoaded` is cleared with it. (This also fixes the pre-existing single-item case, whose back
 handler is `function () { stop(); ui().showView('itemView'); }` and hits the same path.)
 
-**Stop at the last item.** `advance()` stops the current player, and when `index + 1 >= items.length`
-it ends the session (`end()` → pops the handler → `#itemView`) and returns `false`; otherwise it moves
-the index and plays the next item. `next()`/`previous()` are boundary **no-ops** (return `false`) and
-never wrap.
+**Playback modes are session state, applied centrally.** The modes live only in the catalog and are
+honoured by **both** players, because each player's `onended` hands off to `playlist.advance()` while
+a session is active. `advance()` order of operations: repeat-one replay → queue head → order walk →
+wrap/end.
+
+- **Repeat one** replays `currentItem` on the **auto-advance path only**; a manual **Next** still
+  advances (never replays). While repeat-one is on the auto-advance branch fires before the queue is
+  consulted, so the queue is **starved** until repeat drops to `off` (documented limitation).
+- **Repeat all** wraps at the pass end: `rebuildOrderForWrap()` starts a fresh pass — the identity
+  order from the top, or a fresh full shuffle permutation with the just-played track excluded from the
+  **first** slot (shuffle wrap never immediately replays the track that just played; at order length 1
+  the exclusion is skipped). A manual **Next** at the walk end honours the wrap.
+- **Shuffle ON** mid-pass keeps the current item leading and permutes (Fisher-Yates) only the
+  remaining-unplayed **tail** of the current pass; the toggle ON keeps the pass (`passVisited`
+  survives it). Toggling **OFF** rebuilds natural order as the current walk anchor followed by
+  the pass's **ascending not-yet-played remainder** (`passVisited` marks every original index
+  heard so far — through the walk or an Id-matched queue entry): the forward walk never replays
+  a heard track and never strands an unheard one; the Prev-then-Next walk-back is unchanged.
+  Already-heard tracks rejoin only when a wrap — **either** wrap, in-order or shuffled — starts
+  a fresh pass by resetting the visited set at the top of `rebuildOrderForWrap()`.
+- With modes at their defaults and an empty queue, `advance()` at the last position ends the session
+  (`playlist.stop()` → pops the handler → `#itemView`) and returns `false`; `next()`/`previous()`
+  stay boundary **no-ops** (return `false`) that never wrap.
+
+Modes are **per session**: `start()` resets them and rebuilds the identity `playOrder` at the tapped
+index; `endSession()` clears them with the teardown.
+
+**Queues are in-memory only — never `localStorage`, `michelly_playlists` untouched.**
+
+- The **session queue `listQueue`** (head first): `playNext()` head-inserts ('Play next'),
+  `appendQueue()` appends ('Add to queue'). `advance()`/`next()` consume the head **before** the mode
+  walk; a consumed entry becomes `currentItem` while the walk pointer stays put — so **Prev never
+  pulls the queue** (consumed entries are not revisited; documented limitation). The queue is emptied
+  at every `start()` and destroyed by `endSession()`.
+- The **pre-session `pendingQueue`** is produced by the item-view actions menu while no session is
+  active (a session queue cannot exist yet). It is **adopted** — moved head-first into `listQueue`,
+  with the started track's `Id` deduped — only by the next **all-Audio** start; a video or mixed
+  start leaves it intact for the next audio session. It is cleared pre-session by the menu's
+  'Clear queue (n)' row and on a real server switch (`setServerId` — stale-`Id` entries would fail
+  `PlaybackInfo` on the new server), and it deliberately **survives `endSession()`**. It is
+  audio-only by construction: the menu renders only for `Type === 'Audio'` items.
 
 **Page boundary.** `openItems` fetches a single page (`DEFAULT_LIMIT = 60`), and the captured list is
-**exactly that page**. Reaching its end ends the session cleanly; the next page is **explicitly not**
-fetched mid-playback. Auto-playing items the user never saw — plus a mid-playback network failure mode
+**exactly that page**. Reaching its end ends the session cleanly at the mode defaults (under
+repeat-all the wrap restarts this same page); the next page is **explicitly not** fetched
+mid-playback. Auto-playing items the user never saw — plus a mid-playback network failure mode
 — is worse than stopping, and one page covers the common album/season case. `total`/`StartIndex` are
 deliberately not threaded into playback.
 
@@ -455,25 +506,40 @@ calls `playlist.stop()`: the session ends after a **single** failed item. It mus
 into a broken loop. The same holds for a failed `PlaybackInfo` (the player's error callback ends the
 list instead of popping its own handler).
 
-**Prev/Next controls.** `player.js` builds `#playerPrev`/`#playerNext` (attribute-class `player-skip`)
+**Prev/Next and mode controls.** `player.js` builds `#playerPrev`/`#playerNext` (attribute-class `player-skip`)
 into the existing `.player-controls-row`, ordered `Prev, Play/Pause, Next`; `audio.js` builds
-`#audioPrev`/`#audioNext` (`audio-skip`) around `#audioToggle`. `updateListControls()` is called after
+`#audioPrev`/`#audioNext` (`audio-skip`) around `#audioToggle`, plus the session-scoped `#audioRepeat`
+(label cycles `Repeat: Off → All → One` per press), `#audioShuffle` (`Shuffle: Off ↔ On`) and
+`#audioQueueBtn` (`Queue: n`) on the now-playing card. `updateListControls()` is called after
 the overlay/card exists, immediately around `ui().showView(...)` — before it in `player.js` (so the
 overlay is in place for the view's own `navigationInit()`) and after it in `audio.js` (once the card has
-been rebuilt inside the active view). With no active list it sets the buttons to
+been rebuilt inside the active view). With no active list it sets **all** the session-scoped controls to
 `display: none` (so a single-item play is unchanged and the D-pad walk is identical); with an active
-list it shows them and adds a **dimming** class (`is-inert`, `opacity: 0.45`) when the boundary makes
-Prev/Next a no-op. The `disabled` attribute is **never** used: `navigate()` in `frontend/js/index.js`
-includes any element with `offsetWidth > 0 && offsetHeight > 0`, and `.focus()` on a disabled button
-silently fails, which would make the D-pad appear stuck. The buttons stay focusable and simply no-op at
-a boundary. The overlay/card itself stays **always visible**.
+session it shows them and adds a **dimming** class (`is-inert`, `opacity: 0.45`) to Prev/Next when the
+boundary makes them a no-op. `hasNext()` is true only when the queue is non-empty, a later order
+position exists, or repeat-all makes the wrap reachable, and `hasPrevious()` only while the walk
+pointer is above 0 (Prev never pulls the queue) — the dim state mirrors the actual action. The mode
+buttons are always actionable while a session is active (a mode press is never a no-op) and never
+dim; the is-inert/never-`disabled` discipline is otherwise unchanged (`navigate()` in
+`frontend/js/index.js` includes any element with `offsetWidth > 0 && offsetHeight > 0`, and `.focus()`
+on a disabled button silently fails, which would make the D-pad appear stuck). The buttons stay
+focusable and simply no-op at a boundary. The overlay/card itself stays **always visible**.
+
+**Queue overlay.** `#audioQueueBtn` toggles the inline `#audioQueue` overlay in the card: rows are
+**non-tabbable** `<div>`s in play order (head first), with **Clear queue** (`is-inert` while empty)
+and **Close**. Opening pushes **exactly one** back handler while open (the pushed handler does not
+pop; the on-screen buttons do); `Clear queue` re-renders the rows in place with no stack change and
+the overlay stays open. The overlay never survives a card rebuild — `renderNowPlaying()` (every new
+item, including auto-advance) folds it and **pops** its handler — and `audio.stop()` folds it
+**before** the session teardown pops the session entry: teardown order stays LIFO, so one Back after
+an auto-advance reaches the session, never a dead press.
 
 
 #### Saved playlists (`Michelly.playlists`)
 
 Users build up to **three preset playlist slots** on the TV ("Playlist 1/2/3" — fixed names, no
 rename, no user typing) and replay them through the session model above. `frontend/js/app/catalog.js`
-owns the store, the add-from-item picker and the manage view; there is **no** `api.js` call —
+owns the store, the add-from-item actions menu and the manage view; there is **no** `api.js` call —
 server-side playlists are out of scope, the store is fork-owned and TV-only.
 
 **Store (`michelly_playlists`, per-server).** The `localStorage` key maps the server **id** (wired
@@ -502,15 +568,25 @@ connect), `listSlots()` (`[{name, count}]` for this server),
 `Michelly.playlist` (the session API above, still catalog-owned). The manage view reads through
 `playlists` and plays through `playlist.start`.
 
-**Add from the item view.** `renderItem` renders **Add to playlist** right after Play for
-`Type === 'Audio'` items only; grouped music browse reaches it because those cards route through the
-same `openItem(…, list, listIndex)` → `renderItem` path. The button toggles an inline slot picker
-(three slot buttons with live counts + Cancel) and pushes **exactly one** back handler while open —
-same convention as the session handler (`ui.handleBack()` pops before invoking, so the pushed handler
-does not pop; the on-screen choice, Cancel or a toggle press pops it, and a **Play** press closes an
-open picker first, so a session never starts over a stacked handler). Picker buttons are real
-`<button>`s and are **never disabled**. The outcome (`Added to …` / `Already in …` /
-`Could not save the playlist.`) shows in the item view's inline `.playlist-status` line.
+**Add from the item view (the "More" actions menu).** For `Type === 'Audio'` items only, `renderItem`
+renders a **More** button right after Play; grouped music browse reaches it because those cards route
+through the same `openItem(…, list, listIndex)` → `renderItem` path. It toggles an inline **two-step
+actions menu** rendered into a container under the actions. Step 1 rows, in order: **Play next**
+(head-insert), **Add to queue** (append), **Clear queue (n)** (shown only pre-session while the
+pending queue is non-empty — the review/undo surface; it clears and re-renders step 1 in place), **Add
+to playlist**, **Open album** (only when the fetched detail carries `AlbumId` — visible-only, never a
+dead button) and **Cancel**. **Add to playlist** moves to step 2 — the existing 3-slot picker
+(slot buttons with live counts, an **Actions** row back to step 1, **Cancel**), rendered inline by the
+push-free `renderPlaylistSlotRows`. The WHOLE interaction owns **exactly one** back handler:
+`openItemActionsMenu` is the sole push site, step transitions are render-only, and every close path
+pops that one entry (same convention as the session handler — `ui.handleBack()` pops before invoking,
+so the pushed handler must not pop). A **Play** press closes an open menu first, so a session never
+starts over a stacked handler. Queue rows fill the in-memory queue per
+[Ordered list playback](#ordered-list-playback-michellyplaylist) and report depth in the item view's
+inline `.playlist-status` line — `Queued to play next: <name>. (N queued)` / `Added to queue: <name>.
+(N queued)` / `Queue cleared.`; slot adds keep the existing outcomes (`Added to …` / `Already in …` /
+`Could not save the playlist.`), the `Id` duplicate guard and the write-error semantics **unchanged**.
+Menu buttons are real `<button>`s and are **never disabled**.
 
 **Manage view (`#playlistsView`).** Runtime-built on the `ensureSettingsView` pattern —
 `ensurePlaylistsView()` appends a `<div class="view">` to `<body>`, so the shell `index.html` is
@@ -526,9 +602,9 @@ in v1.
 returnTarget)` gained an optional 4th argument — a view-id string **or** a function; when omitted
 (every existing caller) `endSession()` keeps the historical `showView('itemView')`, byte-identical.
 `endSession()` honours the target and clears it on teardown. The single-owner back-stack invariant,
-stop-at-last and the stop-on-failure policy above are **unchanged**. Manage-play passes a function —
-re-render the manage view, then arm the mirror below — as the target, so a playlist that ends
-(naturally, on Back, or on a failed item) returns to the manage view.
+the at-defaults stop-at-last walk and the stop-on-failure policy above are **unchanged**. Manage-play
+passes a function — re-render the manage view, then arm the mirror below — as the target, so a
+playlist that ends (naturally, on Back, or on a failed item) returns to the manage view.
 
 **Never-silent for manage-play.** The players end a failing session by calling `stop()` /
 `finish()` **first** (which runs the return target and lands on the manage view) and write their
@@ -637,8 +713,9 @@ it through `autoConnectSavedServer`; otherwise the picker stays authoritative an
 | Left / Right | 37 / 39 | No-ops. |
 | Back | 461 | `backPressed()` — pop **one** in-app back-stack handler via `Michelly.ui.handleBack()`; only when the stack is empty call `webOS.platformBack()`. |
 
-While a list session plays, the **Prev**/**Next** buttons are part of the same visible tabbable set, so
-Up/Down reaches them like any other control. They are hidden (`display: none`) for a single-item play,
+While a list session plays, the **Prev**/**Next** buttons and the audio card's mode controls
+(**Repeat** / **Shuffle** / **Queue**) are part of the same visible tabbable set, so Up/Down reaches
+them like any other control. All of them are hidden (`display: none`) for a single-item play,
 which keeps the D-pad walk unchanged there; at a list boundary the button stays visible and focusable
 but dimmed (`is-inert`) — it is never `disabled`, because `.focus()` on a disabled button fails.
 
