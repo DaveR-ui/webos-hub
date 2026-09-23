@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-22
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing, native playback (ordered-list sessions and user-built saved playlists), and the bundled Luna discovery service.
-tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, luna, discovery, d-pad, media-server]
-version: 2.6
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse), native playback (ordered-list sessions and user-built saved playlists), and the bundled Luna discovery service.
+tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, music, artist, luna, discovery, d-pad, media-server]
+version: 2.7
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -233,6 +233,103 @@ Every selectable card is a `<button class="card">` so the global D-pad selector 
 it. Each navigation resets the back stack and pushes **exactly one** handler that recreates its parent,
 so the stack stays bounded no matter how deep the user goes. Missing or failed images swap to a text
 fallback (`Michelly.ui.renderImage`).
+
+A library whose `CollectionType` is `music` instead opens the [artist-centric music
+browse](#artist-centric-music-browse-increment-1) below; every other library keeps this folder-grouped
+card-grid render mode.
+
+#### Artist-centric music browse (increment 1)
+
+A music library opens an artist-centric browse rather than the folder-grouped card grid. It is a **UI
+layer over the existing catalog plumbing** — album rows open through the generic items view, `Folders`
+through the [folder-grouped browse](#catalog-browsing), playback through [ordered list
+playback](#ordered-list-playback-michellyplaylist), and failures through the generic `#itemError` slot.
+**No new endpoint, no new `localStorage` key and no new payload file.**
+
+**Namespace and routing.** The feature lives in `frontend/js/app/catalog.js` as `Michelly.music`
+(`openHome(libraryId, userId, libraryName)`, `openArtist(artist, userId)`, `getConfig()`,
+`setConfig(partial)`). It is **not** a new payload file: the [thin loader](#thin-loader--remote-bundle)
+validates an exact ordered **9-file** payload list, so a new file would force an IPK reinstall — keeping
+it in `catalog.js` ships the whole change in the payload (`npm run bundle` + publish, **no IPK**). In
+`openViews`, a library with `CollectionType === 'music'` calls `music.openHome(...)`; every other
+library keeps the folder-grouped card grid above.
+
+**Music home (`#musicView`, runtime-built).** Built in JS on the `ensurePlaylistsView` pattern (the
+shell `index.html` is untouched), it is a static, non-tabbable left rail plus a top bar (**Back** +
+library title + a static, visual-only search field), six filter chips (`All`, `A-F`, `G-M`, `N-T`,
+`U-Z`, `Folders`), a **Jump back in** shelf and a wrapped artist card grid.
+
+- The **shelf** reuses the existing Resume endpoint (`Michelly.api.getResume`), keeps the playable
+  music entries (`Audio`/`MusicAlbum`, max 8) and is hidden entirely when empty or on failure.
+- The **`Folders` chip is navigation, not a filter**: it opens the **existing** folder-grouped browse
+  unchanged, with Back returning to the music home.
+- The letter chips filter the loaded page client-side by `SortName`/`Name` first letter; **Show more**
+  pages the artist list (100 per page) when the server reports more, reusing the artists-fetch variant
+  that actually returned rows (see the data model below).
+
+**Artist detail (`#artistView`, runtime-built).** Three sections, in this order: **Albums**, **Singles
+and EPs**, **Favorites**. An album row opens the album through the generic items view (so its tracks
+play as an ordered list session) and carries its own **Play**.
+
+**Data model.**
+
+| Step | Query |
+| --- | --- |
+| Artists (folder-faithful) | `GET /Items?ParentId={library}&Recursive=false&IncludeItemTypes=Folder,MusicArtist&SortBy=SortName` — one page of 100 |
+| Artists (fallback) | A one-shot retry against `MusicArtist` entities (`Recursive=true`) when the folder-faithful query returns nothing; the home **remembers which variant succeeded** and reuses it for **Show more**, so paging does not silently return nothing on a library that only exposes `MusicArtist` entities |
+| Artist items | One recursive `ParentId={artistId}` fetch (with `UserId={userId}`) fed through the existing `buildGroupedModel` — **each returned section is one album, its `media` array is the authoritative track list** |
+| Artist items (fallback) | A one-shot `AlbumArtistIds={artistId}` query (with `UserId={userId}`) when the recursive folder-faithful query returns nothing (a virtual `MusicArtist` entity exposes no `ParentId` children); a second empty result is accepted as the honest empty state |
+| Favorites | `GET /Items?ParentId={artistId}&UserId={userId}&Recursive=true&Filters=IsFavorite&IncludeItemTypes=MusicAlbum,Audio` |
+
+The three user-scoped queries above (the artist-items fetch, its `AlbumArtistIds` fallback and the
+favorites query) send `UserId` explicitly alongside `Filters=IsFavorite`, so the favorite state is
+unambiguously evaluated against the signed-in user.
+
+**Singles/EPs taxonomy (documented, overridable heuristic).** Jellyfin exposes no album-type field and
+the on-disk folder naming is heterogeneous, so **no folder-name parsing** is used beyond explicit
+markers. `musicClassify(name, trackCount, totalMs)`:
+
+| Condition | Result |
+| --- | --- |
+| name matches `\bsingle\b` | single |
+| name matches `\bep\b` | EP |
+| 1 track | single |
+| 2–6 tracks and summed run time < 30 min | EP |
+| 2–6 tracks and summed run time ≥ 30 min | album |
+| > 6 tracks | album |
+| unknown track count | album (so nothing is hidden) |
+
+The name marker wins over the duration heuristic; the thresholds live in **one place** and are
+overridable at runtime through `Michelly.music.setConfig({epMaxTracks, albumMinMs})` (`getConfig()`
+returns a copy).
+
+**Favorites are Jellyfin user favorites** (`Filters=IsFavorite`), **not** an app-local store — **no new
+`localStorage` key**. `Filters=IsFavorite` returns only the favorited nodes, so the section is built
+from the response itself:
+
+- **Favorited albums are always listed**, including an album whose tracks are not themselves favorited.
+  Such an album has no favorited media to file under it, so it produces no grouped section and is
+  emitted as its own row with **no in-place Play button** — its row button opens the album, where Play
+  works.
+- **Favorited tracks whose parent album was not itself returned** are listed as **single-track rows**:
+  the row button opens the track's own item view, and **Play** starts a one-track session.
+
+**`api.getItems` pass-through.** `frontend/js/app/api.js` `getItems` gained optional query pass-through
+params — `UserId`, `Filters`, `IsFavorite`, `SearchTerm`, `ArtistIds`, `AlbumArtistIds`,
+`ExcludeItemTypes` — with the `Fields` default unchanged.
+
+**Reuse.** `Michelly.audio`, `Michelly.playlist` and `Michelly.playlists` are untouched and remain the
+playback/store path.
+
+**D-pad.** Every interactive element is a real `<button>` and nothing uses the `disabled` attribute (the
+same rule as Prev/Next — `.focus()` on a disabled button fails). The rail is
+static and non-tabbable; the shelf is a **wrapped card row, not a horizontal scroller**, because
+Left/Right are [no-ops](#assuming-leftright-moves-focus). Focus is seeded into the content grid after
+each render.
+
+**Increment 2 (planned, not implemented).** A bottom now-playing bar, an app-global persistent rail, a
+right contextual panel, a hero gradient band, "Recommended Stations", functional server search and
+genre chips are **not** part of this change.
 
 ### Native playback
 

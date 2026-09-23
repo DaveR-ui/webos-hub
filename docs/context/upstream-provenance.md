@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 status: active
 description: Fork provenance for the Jellyfin webOS client — upstream origin and commit, MPL-2.0/Apache-2.0 licensing, the verbatim-import policy, how to sync with upstream, and the divergence log.
 tags: [provenance, fork, upstream, license, mpl-2.0, apache-2.0, sync, divergence, thin-loader]
-version: 2.2
+version: 2.3
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -125,6 +125,13 @@ mechanism they implement is fork-only work, so only the `frontend/index.html` re
 ([#30](#divergence-log)), the `package.json` `bundle` script ([#31](#divergence-log)) and the Build
 workflow change ([#32](#divergence-log)) are divergences.
 `services/service.js` was **not** touched by this change.
+
+The **artist-centric music browse** (increment 1) is likewise fork-only: the `Michelly.music` namespace
+and the runtime-built `#musicView`/`#artistView` views live in `frontend/js/app/catalog.js`, the extra
+`/Items` query pass-through lives in `frontend/js/app/api.js`, and the music styling lives in
+`frontend/css/app.css` — none of these files exists upstream, so the work needs **no divergence row**.
+The upstream-imported files (`frontend/index.html`, `frontend/js/index.js`, `frontend/js/ajax.js`,
+`frontend/js/storage.js`, `frontend/css/main.css`, `services/service.js`) were **not** touched.
 
 `tools/gen-repo.js` and `tools/gen-bundle.js` are **new, fork-only files** (not upstream files), added
 under `tools/` for the same reason; `gen-repo.js`'s `ICON_PATH` is

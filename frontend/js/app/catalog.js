@@ -922,7 +922,13 @@ var Michelly = window.Michelly = window.Michelly || {};
             browse.appendChild(list);
 
             renderCardList(list, items, function (view) {
-                // Music libraries get the folder-grouped card-grid render mode.
+                // Music libraries open the artist-centric music home; every other library
+                // keeps the folder-grouped card-grid render mode.
+                if (view.CollectionType === 'music') {
+                    namespace.music.openHome(view.Id, userId, view.Name);
+                    return;
+                }
+
                 openItems(view.Id, userId, {
                     title: view.Name,
                     ParentId: view.Id,
@@ -1102,6 +1108,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             // descendant media-folders' sections appear in its place.
             if (media.length) {
                 sections.push({
+                    id: folder.Id,
                     name: folder.Name || 'Untitled',
                     path: ancestors.join(' / '),
                     media: media
@@ -1370,8 +1377,14 @@ var Michelly = window.Michelly = window.Michelly || {};
         var limit = opts.Limit || DEFAULT_LIMIT;
         var browse = document.querySelector('#browseView');
 
+        // Caller-supplied back target (music screens re-render themselves); every existing
+        // caller passes no opts.back, so it keeps the historical openViews(userId) behaviour.
         setBackHandler(function () {
-            openViews(userId);
+            if (typeof opts.back === 'function') {
+                opts.back();
+            } else {
+                openViews(userId);
+            }
         });
 
         ui().showView('browseView');
@@ -1632,12 +1645,999 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
+    /* Artist-centric music browsing (increment 1). A UI layer over the existing catalog
+     * plumbing: album rows open through the generic items view, Folders through the
+     * folder-grouped browse, playback through the ordered-list session, and failures through
+     * the generic #itemError slot. No new endpoint and no new localStorage key. */
+
+    // Single/EP/album thresholds, kept in one place and overridable through musicSetConfig().
+    var MUSIC_CONFIG = { epMaxTracks: 6, albumMinMs: 1800000 };
+
+    var MUSIC_CHIPS = ['All', 'A-F', 'G-M', 'N-T', 'U-Z', 'Folders'];
+
+    // Single-entry cache of the rendered music home (the lastGrouped pattern), so Back from an
+    // artist or the grouped browse re-renders synchronously without refetching. Shape:
+    // {libraryId, userId, libraryName, artists, total, startIndex, chip, shelf}.
+    var musicHome = null;
+
+    // The artist detail currently rendered (only one artist view can be open at a time).
+    var artistCache = null;
+
+    // One status line shared by the two music screens (only one is visible at a time).
+    var musicStatusText = '';
+
+    function isViewActive(id) {
+        var view = document.querySelector('#' + id);
+
+        return !!(view && (' ' + view.className + ' ').indexOf(' active ') >= 0);
+    }
+
+    /* Config surface. musicGetConfig() returns a copy; musicSetConfig() merges only the known
+     * numeric keys and returns the resulting config. */
+
+    function musicGetConfig() {
+        return { epMaxTracks: MUSIC_CONFIG.epMaxTracks, albumMinMs: MUSIC_CONFIG.albumMinMs };
+    }
+
+    function musicSetConfig(partial) {
+        if (partial && typeof partial === 'object') {
+            if (typeof partial.epMaxTracks === 'number') {
+                MUSIC_CONFIG.epMaxTracks = partial.epMaxTracks;
+            }
+            if (typeof partial.albumMinMs === 'number') {
+                MUSIC_CONFIG.albumMinMs = partial.albumMinMs;
+            }
+        }
+
+        return musicGetConfig();
+    }
+
+    // classify(name, trackCount, totalMs) -> 'single' | 'ep' | 'album'. The name wins over the
+    // duration heuristic, one track is a single, a small count is an EP unless it runs long, and
+    // an unknown count is an album so nothing is ever hidden in the EP bucket.
+    function musicClassify(name, trackCount, totalMs) {
+        var lowered = String(name || '').toLowerCase();
+
+        if (/\bsingle\b/.test(lowered)) {
+            return 'single';
+        }
+        if (/\bep\b/.test(lowered)) {
+            return 'ep';
+        }
+        if (trackCount === 1) {
+            return 'single';
+        }
+        if (typeof trackCount !== 'number' || !isFinite(trackCount)) {
+            return 'album';
+        }
+        if (trackCount >= 2 && trackCount <= MUSIC_CONFIG.epMaxTracks) {
+            if (typeof totalMs === 'number' && isFinite(totalMs) && totalMs >= MUSIC_CONFIG.albumMinMs) {
+                return 'album';
+            }
+            return 'ep';
+        }
+
+        return 'album';
+    }
+
+    // Sum of a section's track run times in ms (Jellyfin ticks are 10000 per ms), or null when
+    // no track exposes RunTimeTicks (the duration clause is then skipped).
+    function sectionTotalMs(media) {
+        var total = 0;
+        var found = false;
+
+        for (var i = 0; media && i < media.length; i++) {
+            var ticks = media[i] && media[i].RunTimeTicks;
+
+            if (typeof ticks === 'number' && isFinite(ticks)) {
+                total += ticks / 10000;
+                found = true;
+            }
+        }
+
+        return found ? total : null;
+    }
+
+    // Runtime-built views, exactly like ensurePlaylistsView(): the shell index.html is not
+    // changed, the view ships in the payload, and ui.showView() overwrites className so all
+    // styling must key off the id.
+    function ensureMusicView() {
+        if (document.querySelector('#musicView')) {
+            return;
+        }
+
+        var view = document.createElement('div');
+        view.id = 'musicView';
+        view.className = 'view';
+        document.body.appendChild(view);
+    }
+
+    function ensureArtistView() {
+        if (document.querySelector('#artistView')) {
+            return;
+        }
+
+        var view = document.createElement('div');
+        view.id = 'artistView';
+        view.className = 'view';
+        document.body.appendChild(view);
+    }
+
+    // The side rail is static and must never be tabbable: plain div/span nodes only, so the
+    // D-pad walk skips it and lands on real buttons.
+    function buildMusicRail() {
+        var rail = ui().el('div', 'music-rail');
+        rail.appendChild(ui().el('div', 'music-rail-brand', 'MiChelly'));
+
+        var nav = ['Home', 'Search', 'Your Library'];
+
+        for (var i = 0; i < nav.length; i++) {
+            rail.appendChild(ui().el('div', 'music-rail-nav-item', nav[i]));
+        }
+
+        rail.appendChild(ui().el('div', 'music-rail-note', 'Music'));
+
+        return rail;
+    }
+
+    // Back is first in DOM order, so an Up press still reaches it; withSearch adds the static
+    // (non-tabbable) search surface, which is visual only in increment 1.
+    function buildMusicTopbar(titleText, withSearch) {
+        var topbar = ui().el('div', 'music-topbar');
+
+        var back = ui().el('button', 'music-back', 'Back');
+        back.type = 'button';
+        back.onclick = function () {
+            ui().handleBack();
+            return false;
+        };
+        topbar.appendChild(back);
+
+        topbar.appendChild(ui().el('div', 'music-title', titleText));
+
+        if (withSearch) {
+            topbar.appendChild(ui().el('div', 'music-search', 'What do you want to play?'));
+        }
+
+        return topbar;
+    }
+
+    // Seeds the D-pad into the freshly built content; falls back to the Back button when the
+    // screen has nothing focusable (an empty grid with no pager), so focus never sticks to a
+    // control of a now-hidden view.
+    function focusMusicScreen(content, backButton) {
+        focusFirstCard(content);
+
+        var active = document.activeElement;
+
+        if (!active || active === document.body || !active.offsetWidth || !active.offsetHeight) {
+            if (backButton) {
+                backButton.focus();
+            }
+        }
+    }
+
+    /* Music home ---------------------------------------------------------- */
+
+    function openMusicHome(libraryId, userId, libraryName) {
+        musicHome = {
+            libraryId: libraryId,
+            userId: userId,
+            libraryName: libraryName || 'Music',
+            artists: [],
+            total: null,
+            startIndex: 0,
+            chip: 'All',
+            shelf: [],
+            artistsRecursive: false
+        };
+        musicStatusText = '';
+
+        showMusicHome();
+
+        fetchMusicArtists(false, 0, false);
+        loadMusicShelf();
+    }
+
+    // Re-enters the music home with exactly one back handler (Back -> the library list) and a
+    // synchronous re-render from cache. Used on entry and as the Back target from artists and
+    // the grouped browse, so re-entry never leaves the stack empty.
+    function showMusicHome() {
+        if (!musicHome) {
+            return;
+        }
+
+        musicStatusText = '';
+
+        setBackHandler(function () {
+            openViews(musicHome.userId);
+        });
+
+        renderMusicHome(false);
+    }
+
+    function renderMusicHome(focusPager) {
+        if (!musicHome) {
+            return;
+        }
+
+        ensureMusicView();
+
+        var view = document.querySelector('#musicView');
+        ui().showView('musicView');
+        ui().clear(view);
+
+        view.appendChild(buildMusicRail());
+
+        var main = ui().el('div', 'music-main');
+        view.appendChild(main);
+
+        var topbar = buildMusicTopbar(musicHome.libraryName || 'Music', true);
+        main.appendChild(topbar);
+
+        var chips = ui().el('div', 'music-chips');
+
+        for (var c = 0; c < MUSIC_CHIPS.length; c++) {
+            (function (label) {
+                var active = (label !== 'Folders') && (musicHome.chip === label);
+                var chip = ui().el('button', 'music-chip' + (active ? ' is-active' : ''), label);
+                chip.type = 'button';
+                chip.onclick = function () {
+                    // Folders is a navigation action, not a filter: it opens the existing
+                    // folder-grouped browse, and Back returns to the music home.
+                    if (label === 'Folders') {
+                        openItems(musicHome.libraryId, musicHome.userId, {
+                            title: musicHome.libraryName,
+                            ParentId: musicHome.libraryId,
+                            grouped: true,
+                            back: function () {
+                                showMusicHome();
+                            }
+                        });
+                        return false;
+                    }
+
+                    musicHome.chip = label;
+                    musicStatusText = '';
+                    renderMusicHome(false);
+                    return false;
+                };
+                chips.appendChild(chip);
+            })(MUSIC_CHIPS[c]);
+        }
+
+        main.appendChild(chips);
+
+        var content = ui().el('div', 'music-content');
+        main.appendChild(content);
+
+        // The shelf band is only rendered when it has items (never an empty band).
+        if (musicHome.shelf && musicHome.shelf.length) {
+            content.appendChild(buildMusicShelf());
+        }
+
+        content.appendChild(buildArtistGrid());
+
+        // Continuation: only when the server reports more artists than are loaded.
+        var showMore = null;
+
+        if (typeof musicHome.total === 'number' && musicHome.artists.length < musicHome.total) {
+            var pager = ui().el('div', 'pager');
+            showMore = ui().el('button', 'pager-btn', 'Show more');
+            showMore.type = 'button';
+
+            var fetchingMore = false;
+
+            showMore.onclick = function () {
+                if (fetchingMore) {
+                    return false;
+                }
+
+                fetchingMore = true;
+                showMore.textContent = 'Loading...';
+                fetchMusicArtists(musicHome.artistsRecursive, musicHome.startIndex, true);
+                return false;
+            };
+            pager.appendChild(showMore);
+            content.appendChild(pager);
+        }
+
+        var status = ui().el('div', 'music-status', musicStatusText || '');
+        status.style.display = musicStatusText ? '' : 'none';
+        content.appendChild(status);
+
+        if (focusPager && showMore) {
+            showMore.focus();
+        } else {
+            focusMusicScreen(content, topbar.querySelector('.music-back'));
+        }
+    }
+
+    // One page of artists (Limit 100). An empty first page retries once against the
+    // MusicArtist entities (Recursive), then stores into the cache. ES5 callback chain only.
+    function fetchMusicArtists(recursive, startIndex, isMore) {
+        var home = musicHome;
+
+        if (!home) {
+            return;
+        }
+
+        api().getItems({
+            ParentId: home.libraryId,
+            Recursive: recursive,
+            IncludeItemTypes: recursive ? 'MusicArtist' : 'Folder,MusicArtist',
+            SortBy: 'SortName',
+            SortOrder: 'Ascending',
+            Fields: 'PrimaryImageAspectRatio,ParentId',
+            StartIndex: startIndex,
+            Limit: 100
+        }, function (data) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            var items = (data && data.Items) ? data.Items : [];
+
+            // A folder-only library can answer with 0 items on the non-recursive pass; retry
+            // once against the MusicArtist entities before giving up, and remember the variant so
+            // the Show-more button keeps paging the response that actually returned rows.
+            if (!recursive && !isMore && startIndex === 0 && !items.length) {
+                home.artistsRecursive = true;
+                fetchMusicArtists(true, 0, false);
+                return;
+            }
+
+            for (var i = 0; i < items.length; i++) {
+                home.artists.push(items[i]);
+            }
+
+            home.startIndex = startIndex + items.length;
+            home.total = (data && typeof data.TotalRecordCount === 'number') ? data.TotalRecordCount : home.startIndex;
+
+            if (isViewActive('musicView')) {
+                renderMusicHome(isMore);
+            }
+        }, function (err) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            if (!isViewActive('musicView')) {
+                return;
+            }
+
+            if (isMore) {
+                // Keep the already-rendered grid; surface the failure inline instead.
+                musicStatusText = 'Could not load more artists.';
+                renderMusicHome(true);
+                return;
+            }
+
+            // Never show a blank screen.
+            ui().showError(document.querySelector('#musicView .music-content'), err);
+        });
+    }
+
+    function filterMusicArtists(artists, chip) {
+        if (!artists) {
+            return [];
+        }
+
+        if (chip === 'All' || chip === 'Folders') {
+            return artists.slice(0);
+        }
+
+        var out = [];
+
+        for (var i = 0; i < artists.length; i++) {
+            var name = String((artists[i] && (artists[i].SortName || artists[i].Name)) || '');
+            var first = name.charAt(0).toUpperCase();
+            var match = false;
+
+            if (chip === 'A-F') {
+                match = first >= 'A' && first <= 'F';
+            } else if (chip === 'G-M') {
+                match = first >= 'G' && first <= 'M';
+            } else if (chip === 'N-T') {
+                match = first >= 'N' && first <= 'T';
+            } else if (chip === 'U-Z') {
+                match = first >= 'U' && first <= 'Z';
+            }
+
+            if (match) {
+                out.push(artists[i]);
+            }
+        }
+
+        return out;
+    }
+
+    function buildArtistGrid() {
+        var grid = ui().el('div', 'card-list music-grid');
+        var artists = filterMusicArtists(musicHome.artists, musicHome.chip);
+
+        if (!artists.length) {
+            // Only claim "no artists" once the first load has settled; while the fetch is in
+            // flight the grid is simply empty.
+            if (musicHome.total !== null) {
+                grid.appendChild(ui().el('div', 'music-empty',
+                    musicHome.artists.length ? 'No artists in this range.' : 'No artists found.'));
+            }
+            return grid;
+        }
+
+        for (var i = 0; i < artists.length; i++) {
+            grid.appendChild(buildArtistCard(artists[i], musicHome.userId));
+        }
+
+        return grid;
+    }
+
+    function buildArtistCard(artist, userId) {
+        var button = ui().el('button', 'card card-artist');
+        button.type = 'button';
+
+        var poster = ui().el('div', 'card-poster');
+        var img = document.createElement('img');
+        img.alt = artist.Name || '';
+        poster.appendChild(img);
+        button.appendChild(poster);
+
+        var tag = artist.ImageTags && artist.ImageTags.Primary;
+        ui().renderImage(img, tag ? api().imageUrl(artist.Id, 'Primary', { maxWidth: 320, tag: tag }) : null,
+            artist.Name || '');
+
+        button.appendChild(ui().el('div', 'card-title', artist.Name || 'Untitled'));
+
+        // The album count is shown only when the server exposes it (the home fetch does not
+        // request ChildCount); never invent a count.
+        var count = null;
+
+        if (typeof artist.ChildCount === 'number') {
+            count = artist.ChildCount;
+        } else if (typeof artist.RecursiveItemCount === 'number') {
+            count = artist.RecursiveItemCount;
+        }
+
+        button.appendChild(ui().el('div', 'card-sub',
+            count === null ? 'Artist' : 'Artist - ' + count + ' albums'));
+
+        button.onclick = function () {
+            openArtist(artist, userId);
+            return false;
+        };
+
+        return button;
+    }
+
+    // "Jump back in" shelf: reuses the Resume endpoint, keeps the playable music entries (max
+    // 8), and stays hidden entirely when the list is empty or the call fails.
+    function loadMusicShelf() {
+        var home = musicHome;
+
+        if (!home) {
+            return;
+        }
+
+        api().getResume(home.userId, function (data) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            var raw = (data && data.Items) ? data.Items : [];
+            var shelf = [];
+
+            for (var i = 0; i < raw.length && shelf.length < 8; i++) {
+                if (raw[i] && (raw[i].Type === 'Audio' || raw[i].Type === 'MusicAlbum')) {
+                    shelf.push(raw[i]);
+                }
+            }
+
+            home.shelf = shelf;
+
+            if (shelf.length && isViewActive('musicView')) {
+                insertMusicShelf();
+            }
+        }, function () {
+            if (musicHome !== home) {
+                return;
+            }
+
+            home.shelf = [];
+        });
+    }
+
+    // Inserts or replaces the shelf in place, before the artist grid, so a late Resume response
+    // does not steal D-pad focus through a full re-render.
+    function insertMusicShelf() {
+        var content = document.querySelector('#musicView .music-content');
+        var grid = content ? content.querySelector('.music-grid') : null;
+
+        if (!content || !grid) {
+            return;
+        }
+
+        var existing = content.querySelector('.music-shelf');
+
+        if (existing) {
+            content.removeChild(existing);
+        }
+
+        if (musicHome && musicHome.shelf && musicHome.shelf.length) {
+            content.insertBefore(buildMusicShelf(), grid);
+        }
+    }
+
+    function buildMusicShelf() {
+        var shelf = ui().el('div', 'music-shelf');
+
+        var head = ui().el('div', 'folder-section-head');
+        head.appendChild(ui().el('h2', 'folder-section-title', 'Jump back in'));
+        shelf.appendChild(head);
+
+        var list = ui().el('div', 'card-list');
+
+        for (var i = 0; i < musicHome.shelf.length; i++) {
+            list.appendChild(makeCard(musicHome.shelf[i], playShelfItem));
+        }
+
+        shelf.appendChild(list);
+
+        return shelf;
+    }
+
+    // Audio items join an audio-only ordered session. A MusicAlbum would be misrouted by the
+    // session to the video player, so it opens its album through the generic items view instead.
+    function playShelfItem(item) {
+        if (!musicHome) {
+            return;
+        }
+
+        if (item.Type !== 'Audio') {
+            openItems(item.Id, musicHome.userId, {
+                title: item.Name,
+                ParentId: item.Id,
+                Recursive: false,
+                IncludeItemTypes: 'Audio',
+                Fields: 'PrimaryImageAspectRatio',
+                back: function () {
+                    showMusicHome();
+                }
+            });
+            return;
+        }
+
+        var queue = [];
+        var index = -1;
+        var i;
+
+        for (i = 0; i < musicHome.shelf.length; i++) {
+            if (musicHome.shelf[i].Type === 'Audio') {
+                queue.push(musicHome.shelf[i]);
+            }
+        }
+
+        for (i = 0; i < queue.length; i++) {
+            if (queue[i].Id === item.Id) {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0) {
+            return;
+        }
+
+        musicStatusText = '';
+        ensureItemErrorSlot();
+        playlistStart(queue, index, musicHome.userId, function () {
+            renderMusicHome(false);
+            musicMirrorPlayError(function () {
+                renderMusicHome(false);
+            }, 'musicView');
+        });
+    }
+
+    /* Artist detail ------------------------------------------------------- */
+
+    function openArtist(artist, userId) {
+        if (!artist || !artist.Id) {
+            return;
+        }
+
+        artistCache = {
+            artistId: artist.Id,
+            artistName: artist.Name || 'Artist',
+            userId: userId,
+            albums: [],
+            singles: [],
+            favorites: [],
+            loaded: false
+        };
+
+        showArtist();
+
+        var cache = artistCache;
+
+        // One settled artist response feeds this step. cache.loaded flips true here so the three
+        // sections stop showing the loading placeholder.
+        function applyArtistItems(items) {
+            var split = splitArtistSections(buildGroupedModel(items, artist.Id), artist.Id);
+
+            cache.albums = split.albums;
+            cache.singles = split.singles;
+            cache.loaded = true;
+
+            if (isViewActive('artistView')) {
+                renderArtist();
+            }
+
+            loadArtistFavorites(artist.Id, userId);
+        }
+
+        function onArtistFailure(err) {
+            if (artistCache !== cache) {
+                return;
+            }
+
+            cache.loaded = true;
+            ui().showError(document.querySelector('#artistView .music-content'), err);
+        }
+
+        api().getItems({
+            ParentId: artist.Id,
+            UserId: userId,
+            Recursive: true,
+            IncludeItemTypes: 'Folder,MusicAlbum,Audio',
+            SortBy: 'SortName',
+            SortOrder: 'Ascending',
+            Fields: 'PrimaryImageAspectRatio,ParentId,ChildCount',
+            StartIndex: 0,
+            Limit: 300
+        }, function (data) {
+            if (artistCache !== cache) {
+                return;
+            }
+
+            var items = (data && data.Items) ? data.Items : [];
+
+            if (items.length) {
+                applyArtistItems(items);
+                return;
+            }
+
+            // A virtual MusicArtist entity (Jellyfin's IsAccessedByName) exposes no children via
+            // ParentId, so an empty result retries once against the artist-id filter. A second
+            // empty result is accepted as the honest empty state (no third variant, no loop).
+            api().getItems({
+                AlbumArtistIds: artist.Id,
+                UserId: userId,
+                Recursive: true,
+                IncludeItemTypes: 'Folder,MusicAlbum,Audio',
+                SortBy: 'SortName',
+                SortOrder: 'Ascending',
+                Fields: 'PrimaryImageAspectRatio,ParentId,ChildCount',
+                StartIndex: 0,
+                Limit: 300
+            }, function (fallbackData) {
+                if (artistCache !== cache) {
+                    return;
+                }
+
+                var fallbackItems = (fallbackData && fallbackData.Items) ? fallbackData.Items : [];
+                applyArtistItems(fallbackItems);
+            }, onArtistFailure);
+        }, onArtistFailure);
+    }
+
+    // Re-enters the artist view with exactly one back handler (Back -> cached music home) and a
+    // synchronous re-render from cache, so the album drill-down's Back never leaves the stack empty.
+    function showArtist() {
+        if (!artistCache) {
+            return;
+        }
+
+        musicStatusText = '';
+
+        setBackHandler(function () {
+            if (musicHome) {
+                showMusicHome();
+            } else {
+                openViews(artistCache.userId);
+            }
+        });
+
+        renderArtist();
+    }
+
+    function renderArtist() {
+        if (!artistCache) {
+            return;
+        }
+
+        ensureArtistView();
+
+        var view = document.querySelector('#artistView');
+        ui().showView('artistView');
+        ui().clear(view);
+
+        view.appendChild(buildMusicRail());
+
+        var main = ui().el('div', 'music-main');
+        view.appendChild(main);
+
+        var topbar = buildMusicTopbar(artistCache.artistName, false);
+        main.appendChild(topbar);
+
+        var content = ui().el('div', 'music-content');
+        main.appendChild(content);
+
+        var loading = !artistCache.loaded;
+        content.appendChild(buildMusicSection('Albums', artistCache.albums, loading ? 'Loading...' : 'No albums.'));
+        content.appendChild(buildMusicSection('Singles and EPs', artistCache.singles, loading ? 'Loading...' : 'No singles or EPs.'));
+        content.appendChild(buildMusicSection('Favorites', artistCache.favorites, loading ? 'Loading...' : 'No favorites yet.'));
+
+        var status = ui().el('div', 'music-status', musicStatusText || '');
+        status.style.display = musicStatusText ? '' : 'none';
+        content.appendChild(status);
+
+        focusMusicScreen(content, topbar.querySelector('.music-back'));
+    }
+
+    // One model.sections entry is one album; its media array is the authoritative track list.
+    // rootMedia/orphans (Audio sitting directly on the artist) become one implicit '(Singles)'
+    // album whose id is the artist folder, so the row still opens the generic items view.
+    function splitArtistSections(model, artistId) {
+        var albums = [];
+        var singles = [];
+        var i, section, kind;
+
+        for (i = 0; i < model.sections.length; i++) {
+            section = model.sections[i];
+            kind = musicClassify(section.name, section.media.length, sectionTotalMs(section.media));
+
+            if (kind === 'album') {
+                albums.push(section);
+            } else {
+                singles.push(section);
+            }
+        }
+
+        var loose = (model.rootMedia || []).concat(model.orphans || []);
+
+        if (loose.length) {
+            singles.push({
+                id: artistId,
+                name: '(Singles)',
+                path: '',
+                media: loose,
+                loose: true
+            });
+        }
+
+        return { albums: albums, singles: singles };
+    }
+
+    function buildMusicSection(title, sections, emptyMsg) {
+        var sectionEl = ui().el('div', 'music-section');
+
+        var head = ui().el('div', 'music-section-head');
+        head.appendChild(ui().el('h2', 'music-section-title', title));
+        sectionEl.appendChild(head);
+
+        if (!sections || !sections.length) {
+            // A non-tabbable line, never a dead button.
+            sectionEl.appendChild(ui().el('div', 'music-empty', emptyMsg));
+            return sectionEl;
+        }
+
+        for (var i = 0; i < sections.length; i++) {
+            sectionEl.appendChild(buildMusicRow(sections[i], artistCache.userId));
+        }
+
+        return sectionEl;
+    }
+
+    function buildMusicRow(section, userId) {
+        var row = ui().el('div', 'playlist-row music-row');
+
+        var thumb = ui().el('button', 'music-row-thumb');
+        thumb.type = 'button';
+
+        var img = document.createElement('img');
+        img.alt = section.name || '';
+        thumb.appendChild(img);
+
+        var image = firstMediaImage(section.media);
+        ui().renderImage(img, image ? api().imageUrl(image.id, 'Primary', { maxWidth: 320, tag: image.tag }) : null,
+            section.name || '');
+
+        thumb.appendChild(ui().el('span', 'music-row-title', section.name || 'Untitled'));
+
+        thumb.onclick = function () {
+            // A loose favorited track has no folder to descend into, so open its own detail
+            // through the generic path; every other row is an album folder.
+            if (section.track === true) {
+                openItem(section.media[0].Id, userId, function () {
+                    showArtist();
+                });
+                return false;
+            }
+
+            // Reuses the generic items view and its ordered playback; Back returns to the artist.
+            openItems(section.id, userId, {
+                title: section.name,
+                ParentId: section.id,
+                Recursive: false,
+                IncludeItemTypes: 'Audio',
+                Fields: 'PrimaryImageAspectRatio',
+                back: function () {
+                    showArtist();
+                }
+            });
+            return false;
+        };
+        row.appendChild(thumb);
+
+        // An album-only favorite carries no in-place tracks in this response, so a Play button
+        // would have an empty queue; the thumb opens the album (whose own Play works) instead.
+        if (section.albumOnly !== true) {
+            var play = ui().el('button', 'music-play-btn', 'Play');
+            play.type = 'button';
+            play.onclick = function () {
+                musicStatusText = '';
+                ensureItemErrorSlot();
+                playlistStart(section.media.slice(0), 0, userId, function () {
+                    renderArtist();
+                    musicMirrorPlayError(function () {
+                        renderArtist();
+                    }, 'artistView');
+                });
+                return false;
+            };
+            row.appendChild(play);
+        }
+
+        return row;
+    }
+
+    // The grouped model exposes album folders without their own image tags; use the first track
+    // that carries a Primary image, else null so the text fallback takes over.
+    function firstMediaImage(media) {
+        for (var i = 0; media && i < media.length; i++) {
+            if (media[i] && media[i].Id && media[i].ImageTags && media[i].ImageTags.Primary) {
+                return { id: media[i].Id, tag: media[i].ImageTags.Primary };
+            }
+        }
+
+        return null;
+    }
+
+    function loadArtistFavorites(artistId, userId) {
+        var cache = artistCache;
+
+        api().getItems({
+            ParentId: artistId,
+            UserId: userId,
+            Recursive: true,
+            Filters: 'IsFavorite',
+            IncludeItemTypes: 'MusicAlbum,Audio',
+            Fields: 'PrimaryImageAspectRatio,ParentId,ChildCount'
+        }, function (data) {
+            if (artistCache !== cache) {
+                return;
+            }
+
+            var items = (data && data.Items) ? data.Items : [];
+            var model = buildGroupedModel(items, artistId);
+            var favorites = [];
+            var seen = {};
+            var i, item;
+            var loose;
+
+            // Favorited albums that directly hold favorited media.
+            for (i = 0; i < model.sections.length; i++) {
+                favorites.push(model.sections[i]);
+                seen[String(model.sections[i].id)] = true;
+            }
+
+            // Favorited albums whose tracks are NOT favorited produce no section above (the
+            // section is emitted only for a folder that directly holds media in this response),
+            // and a folder type is neither rootMedia nor an orphan - so emit one row per returned
+            // album to keep it visible.
+            for (i = 0; i < items.length; i++) {
+                item = items[i];
+
+                if (item && item.Type === 'MusicAlbum' && item.Id && !seen.hasOwnProperty(String(item.Id))) {
+                    seen[String(item.Id)] = true;
+                    favorites.push({
+                        id: item.Id,
+                        name: item.Name || 'Untitled',
+                        path: '',
+                        media: [],
+                        albumOnly: true
+                    });
+                }
+            }
+
+            // Favorited tracks whose parent album was not itself returned.
+            loose = (model.rootMedia || []).concat(model.orphans || []);
+
+            for (i = 0; i < loose.length; i++) {
+                favorites.push({
+                    id: loose[i].AlbumId || loose[i].Id,
+                    name: loose[i].Name || 'Untitled',
+                    path: '',
+                    media: [loose[i]],
+                    track: true
+                });
+            }
+
+            cache.favorites = favorites;
+
+            if (isViewActive('artistView')) {
+                renderArtist();
+            }
+        }, function () {
+            if (artistCache !== cache) {
+                return;
+            }
+
+            // A favorites failure must not break the other two sections: show the empty line.
+            cache.favorites = [];
+
+            if (isViewActive('artistView')) {
+                renderArtist();
+            }
+        });
+    }
+
+    // The players end a failed session by stopping first (which runs our return target back onto
+    // the music screen) and write #itemError after; a failed PlaybackInfo additionally re-shows
+    // the shell #itemView. One tick later, surface a non-empty #itemError on the music status
+    // line, restoring the music screen when the player stranded the user. #itemError is a
+    // foreign node: never write or clear it (same reasoning as mirrorManagePlayError).
+    function musicMirrorPlayError(rerender, viewId) {
+        ensureItemErrorSlot();
+
+        setTimeout(function () {
+            var slot = document.querySelector('#itemError');
+
+            if (!slot) {
+                return;
+            }
+
+            var msg = String(slot.textContent || '').replace(/^\s+|\s+$/g, '');
+
+            if (!msg) {
+                return;
+            }
+
+            // Nothing to mirror when the user has left the music flow entirely.
+            if (!isViewActive(viewId) && !isViewActive('itemView')) {
+                return;
+            }
+
+            musicStatusText = msg;
+            rerender();
+        }, 0);
+    }
+
     namespace.catalog = {
         openViews: openViews,
         openItems: openItems,
         openItem: openItem,
         openEpisodes: openEpisodes,
         openResume: openResume
+    };
+
+    // Artist-centric music browsing (increment 1). openArtist is exposed for callers that
+    // already hold an artist node; the home grid routes through it internally.
+    namespace.music = {
+        openHome: openMusicHome,
+        openArtist: openArtist,
+        getConfig: musicGetConfig,
+        setConfig: musicSetConfig
     };
 
     namespace.playlist = {

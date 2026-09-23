@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist]
-version: 2.5
+version: 2.6
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -103,6 +103,8 @@ What must run on Chromium 38 is the app itself, and it does so with a small, fix
   views);
 - `<video>` with a direct `/Videos/{id}/stream` source, and `<audio>` with a direct
   `/Audio/{id}/stream` source;
+- the artist-centric music views (`#musicView`/`#artistView`) — runtime-built with
+  `document.createElement`, flexbox-only, every control a `<button>`; **no new engine feature**;
 - the thin loader: synchronous pure-JS SHA-256, `XMLHttpRequest` `arraybuffer` fetches and inline
   classic-script injection (no `crypto.subtle`, no `fetch`, no Service Worker);
 - flexbox layouts with `-webkit-` prefixes.
