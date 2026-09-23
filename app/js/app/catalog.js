@@ -119,12 +119,187 @@ var Michelly = window.Michelly = window.Michelly || {};
     var listActive = false;
     var listKind = null;
 
+    // Playback-mode state (repeat / shuffle). The defaults below reproduce the historical
+    // in-order behaviour exactly: no repeat, no shuffle, an identity play order.
+    var listRepeatMode = 'off';   // 'off' | 'all' | 'one'
+    var listShuffle = false;
+    var playOrder = null;         // array of indices into listItems defining visit sequence
+    var orderPos = -1;            // pointer into playOrder of the current item
+
+    // Indices heard so far in the current pass, through ANY route (the order walk, or a
+    // queue entry matched by Id): passVisited[index] === true. A lazily created boolean
+    // array sized to listItems.length (all false at creation); every pass reset sets the
+    // variable to null and the next mark rebuilds it. Unlike a scalar high-water mark it
+    // can express holes: the shuffle-off rebuild resumes the pass's ascending
+    // not-yet-played remainder — never replays a heard track, never strands an unheard
+    // one.
+    var passVisited = null;
+
+    // Mark one ORIGINAL list index as heard in the current pass. The boolean array is
+    // created (all false) on the first mark; a negative index marks nothing (a queue
+    // entry that matches no list member). Re-marks are idempotent (repeat-one replays).
+    function markVisited(index) {
+        if (!listItems || index < 0) {
+            return;
+        }
+
+        if (!passVisited || passVisited.length !== listItems.length) {
+            var fresh = [];
+
+            for (var i = 0; i < listItems.length; i++) {
+                fresh.push(false);
+            }
+
+            passVisited = fresh;
+        }
+
+        if (index < passVisited.length) {
+            passVisited[index] = true;
+        }
+    }
+
+    // Session queue (head first = next to play), in-memory only: it never touches
+    // localStorage and is cleared on every session teardown.
+    var listQueue = [];
+
+    // Pre-session pending queue: "Play next"/"Add to queue" recorded from the item view
+    // while NO session is active (a session queue cannot exist yet). Head-first order is
+    // preserved. Pending lifetime: it survives browsing AND session teardowns and is
+    // adopted (moved into listQueue) ONLY by a start whose items are all Audio — a video
+    // or mixed start skips adoption so the queue stays intact for the next audio session.
+    // It is cleared by playlistClearQueue() pre-session, cleared on every server switch
+    // (setServerId: stale Ids would fail PlaybackInfo on the new server), and dies with
+    // nothing else. In-memory only, never persisted.
+    var pendingQueue = [];
+
+    // The item actually playing right now. listIndex stays authoritative for list items,
+    // but a queue item may not live in listItems at all, so repeat-one replays this.
+    var currentItem = null;
+
     // Optional end-of-session destination (Scope A: user playlists return to the manage
     // view). A view-id string or a function; null keeps the historical #itemView default.
     var listReturnTarget = null;
 
     function playlistIsActive() {
         return listActive;
+    }
+
+    // True when the array is non-empty and EVERY item carries Type === 'Audio'. Used to
+    // gate pending-queue adoption (an all-Audio start) — video/mixed lists must not
+    // swallow the pre-session queue.
+    function allAudioItems(items) {
+        if (!items || !items.length) {
+            return false;
+        }
+
+        for (var i = 0; i < items.length; i++) {
+            if (!items[i] || items[i].Type !== 'Audio') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Index of the first list entry with the given Id, or -1. An adopted queue entry is
+    // the fetched DETAIL object, not the same reference as the list entry, so identity
+    // comparison (indexOf) cannot be used for Id-based "was this heard?" checks.
+    function findIndexById(items, id) {
+        if (!items || !items.length || !id) {
+            return -1;
+        }
+
+        for (var i = 0; i < items.length; i++) {
+            if (items[i] && items[i].Id && String(items[i].Id) === String(id)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    // Identity visit order [0..n-1] over the captured list page.
+    function buildInOrder() {
+        var n = listItems ? listItems.length : 0;
+        var order = [];
+
+        for (var i = 0; i < n; i++) {
+            order.push(i);
+        }
+
+        return order;
+    }
+
+    // Fisher-Yates shuffle, in place (Math.random is the only randomness used).
+    function shuffleArray(arr) {
+        for (var i = arr.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+        }
+    }
+
+    // A fresh full permutation for a repeat-all wrap. When the track that just played is
+    // excluded from the FIRST slot, the same track never repeats back-to-back.
+    function shuffledOrder(excludeFirst) {
+        var order = buildInOrder();
+
+        shuffleArray(order);
+
+        if (excludeFirst !== null && excludeFirst !== undefined &&
+                order.length > 1 && order[0] === excludeFirst) {
+            for (var i = 1; i < order.length; i++) {
+                if (order[i] !== excludeFirst) {
+                    order[0] = order[i];
+                    order[i] = excludeFirst;
+                    break;
+                }
+            }
+        }
+
+        return order;
+    }
+
+    // Shuffle toggle ON, mid-session: the current item leads, then a random permutation
+    // of ONLY the not-yet-visited tail of the current pass (playOrder past the walk
+    // pointer). The tail's not-yet-heard guarantee is the walk's: a track heard through a
+    // QUEUE entry (matched by Id, not the walk) may still sit in the tail, and
+    // shuffledFromWalk does not consult passVisited — the visited set guards only the
+    // reverse toggle (the shuffle-off rebuild in playlistSetShuffle). Toggling ON can
+    // never re-queue a walk-visited track: already-visited indices rejoin only on the
+    // next wrap (rebuildOrderForWrap), which starts the fresh pass. The anchor is the
+    // walk position playOrder[orderPos] — NOT listIndex — because the walk does not
+    // move while a queue item plays, so it is the honest current index even then.
+    function shuffledFromWalk() {
+        var current = (playOrder && orderPos >= 0 && orderPos < playOrder.length)
+            ? playOrder[orderPos]
+            : listIndex;
+        var tail = (playOrder && orderPos >= 0) ? playOrder.slice(orderPos + 1) : [];
+        var order = [];
+        var i;
+
+        shuffleArray(tail);
+
+        if (typeof current === 'number' && current >= 0) {
+            order.push(current);
+        }
+
+        for (i = 0; i < tail.length; i++) {
+            order.push(tail[i]);
+        }
+
+        return order;
+    }
+
+    // The list index last visited through the order walk (null when none applies, e.g.
+    // while a queue item is the only thing that ever played).
+    function lastOrderIndex() {
+        if (!playOrder || orderPos < 0 || orderPos >= playOrder.length) {
+            return null;
+        }
+
+        return playOrder[orderPos];
     }
 
     function stopCurrentPlayer() {
@@ -151,6 +326,20 @@ var Michelly = window.Michelly = window.Michelly || {};
         listIndex = -1;
         listUserId = null;
 
+        // Playback-mode / queue teardown: the next session always starts in-order with
+        // fresh defaults. listQueue dies with the session; pendingQueue deliberately
+        // SURVIVES it — it was queued for future sessions and stays until adopted by a
+        // start or explicitly cleared (that is the feature, not a leak).
+        listRepeatMode = 'off';
+        listShuffle = false;
+        listQueue = [];
+        currentItem = null;
+        playOrder = null;
+        orderPos = -1;
+
+        // The pass dies with the session; a new session starts a new pass.
+        passVisited = null;
+
         if (popHandler) {
             ui().popBackHandler();
         }
@@ -172,8 +361,51 @@ var Michelly = window.Michelly = window.Michelly || {};
         endSession(true);
     }
 
-    function playCurrent() {
-        var item = listItems ? listItems[listIndex] : null;
+    // Plays the item the session should be on right now. Queue consumption is OPT-IN per
+    // caller: only advance()/next() pass true. previous() and playlistStart() play the
+    // queue-free walk item, so Prev can never pull the queue forward.
+    function playCurrent(consumeQueue) {
+        var item;
+
+        if (consumeQueue && listQueue.length) {
+            // A queued item becomes the current item: listItems[listIndex] is NOT updated
+            // (the queue entry may not be in listItems at all) and the order walk stays
+            // where it was, so Prev always walks and never plays the queue head
+            // (documented limitation: consumed queue entries are not revisited).
+            item = listQueue.shift();
+
+            // Same pass, same list: a queue entry that matches a list member by Id counts
+            // as heard, so it leaves the shuffle-off not-yet-played remainder exactly as
+            // the order walk does (an adopted entry is a detail copy, hence the Id
+            // search; no match = not a list member = mark nothing).
+            if (item && item.Id) {
+                var qIdx = findIndexById(listItems, item.Id);
+
+                if (qIdx >= 0) {
+                    markVisited(qIdx);
+                }
+            }
+        } else if (playOrder && orderPos >= 0 && orderPos < playOrder.length &&
+                listItems && listItems.length) {
+            // listIndex stays authoritative for the item currently playing: existing
+            // callers keep reading listItems[listIndex], so keep the two in sync.
+            listIndex = playOrder[orderPos];
+
+            markVisited(listIndex);
+
+            item = listItems[listIndex];
+        } else {
+            item = listItems ? listItems[listIndex] : null;
+        }
+
+        playItem(item);
+    }
+
+    // Routes the session to a concrete item object. The only difference from the old
+    // playCurrent() body is that the item may now be a queue entry rather than a list
+    // member; the routing and mixed-kind teardown are byte-identical.
+    function playItem(item) {
+        currentItem = item || null;
 
         if (!item) {
             playlistEnd();
@@ -207,6 +439,55 @@ var Michelly = window.Michelly = window.Michelly || {};
         listUserId = userId;
         listActive = true;
 
+        // Playback modes reset per session; the visit order starts as the identity walk
+        // over the captured page positioned at the tapped index. This reproduces the
+        // historical in-order behaviour exactly (prev may still walk above the start
+        // index). orderPos = listIndex makes playOrder[orderPos] === listIndex there.
+        listRepeatMode = 'off';
+        listShuffle = false;
+
+        // A fresh pass: the visited set starts empty (the start item marks itself when
+        // playCurrent() runs below). That also covers "shuffle toggled OFF before
+        // anything advanced": the set holds only the start item's mark, so the
+        // shuffle-off rebuild anchors on the start walk position and the ascending
+        // remainder covers every other index — no skip of the untouched surround.
+        passVisited = null;
+
+        // Adopt the pre-session pending queue ONLY for an all-Audio start. The pending
+        // queue is Audio-only by construction (the item menu renders only Audio entries),
+        // asserted defensively below; the START list decides: an all-Audio session
+        // (albums, artist tracks, saved-slot plays) adopts head-first, then drops every
+        // adopted entry whose Id matches the just-started track (the tapped item is
+        // playing now, so re-queuing it would double-play it). A video or mixed start
+        // SKIPS adoption — a queued audio track routed into a video walk would kind-flip
+        // to the audio player mid-list and leave hasNext() lit for a foreign entry — and
+        // the pending queue stays intact for the next audio session. Adoption is a move,
+        // not a copy: an adopted pending queue is empty afterwards.
+        listQueue = [];
+
+        if (pendingQueue.length && listItems.length && allAudioItems(listItems)) {
+            listQueue = pendingQueue.slice(0);
+            pendingQueue = [];
+
+            if (listQueue.length && listItems[listIndex] && listItems[listIndex].Id) {
+                var startId = listItems[listIndex].Id;
+                var adopted = [];
+
+                for (var aq = 0; aq < listQueue.length; aq++) {
+                    if (listQueue[aq].Id !== startId) {
+                        adopted.push(listQueue[aq]);
+                    }
+                }
+
+                listQueue = adopted;
+            }
+        }
+        // Mixed/video start: pendingQueue deliberately untouched.
+
+        currentItem = null;
+        playOrder = buildInOrder();
+        orderPos = listIndex;
+
         // Optional end-of-session destination: a view-id string or a function (user playlists
         // return to the manage view). When omitted (every existing caller) it stays null and
         // endSession() falls back to the historical showView('itemView').
@@ -222,31 +503,110 @@ var Michelly = window.Michelly = window.Michelly || {};
         playCurrent();
     }
 
-    // Called by the players' onended while list mode is active. Stop at the last item:
-    // no wrap, no repeat, no shuffle.
+    // Repeat-all wrap: a fresh pass over the list. In-order rebuilds the identity walk
+    // from the top; shuffle builds a fresh permutation with the just-played track
+    // excluded from the FIRST slot, so the same track never repeats back-to-back.
+    // (At order length 1 the exclusion is skipped and the same track replays —
+    // acceptable, "keep playing forever".)
+    function rebuildOrderForWrap() {
+        // Either wrap (in-order or shuffled) starts a NEW pass: the visited set resets so
+        // the fresh pass replays what the last pass already heard (expected wrap
+        // behaviour) and the shuffle-off rebuild anchors on nothing heard before the
+        // wrap. playCurrent() re-marks from the first played index of the new pass.
+        passVisited = null;
+
+        if (listShuffle) {
+            // The exclusion anchor is the item that JUST played. A queue item may have
+            // played last (the walk itself did not move), so prefer the current item's
+            // own identity in listItems, then its Id (an adopted queue entry is the
+            // fetched detail object, NOT the same reference as the list entry), and fall
+            // back to the last order-walk position only for a queue entry that matches
+            // no list member at all.
+            var excludeFirst = (listItems && currentItem) ? listItems.indexOf(currentItem) : -1;
+
+            if (excludeFirst < 0 && listItems && currentItem && currentItem.Id) {
+                for (var ex = 0; ex < listItems.length; ex++) {
+                    if (listItems[ex] && listItems[ex].Id === currentItem.Id) {
+                        excludeFirst = ex;
+                        break;
+                    }
+                }
+            }
+
+            playOrder = shuffledOrder(excludeFirst >= 0 ? excludeFirst : lastOrderIndex());
+        } else {
+            // In-order repeat-all: standard album restart from the top (the fresh-pass
+            // visited-set reset already ran at the top of this function).
+            playOrder = buildInOrder();
+        }
+
+        orderPos = 0;
+    }
+
+    // Called by the players' onended while list mode is active. With the modes at their
+    // defaults (repeat 'off', no shuffle, empty queue) this is byte-identical to the
+    // historical in-order advance: next index, and the session ends at the last item.
     function playlistAdvance() {
         if (!listActive) {
             return false;
         }
 
+        // Repeat-one: replay the current item without consuming the queue or the order
+        // walk. Manual Next must NOT replay (see playlistNext), so this branch lives in
+        // the auto-advance path only.
+        if (listRepeatMode === 'one' && currentItem) {
+            stopCurrentPlayer();
+            playItem(currentItem);
+            return true;
+        }
+
         stopCurrentPlayer();
 
-        if (listIndex + 1 >= listItems.length) {
-            playlistEnd();
+        // Queue first: the head becomes the current item (playCurrent(true) shifts it).
+        if (listQueue.length) {
+            playCurrent(true);
+            return true;
+        }
+
+        if (playOrder && orderPos + 1 < playOrder.length) {
+            orderPos++;
+            playCurrent();
+            return true;
+        }
+
+        // End of the order walk: repeat-all wraps into a fresh pass; repeat-off ends
+        // the session (the historical behaviour).
+        if (listRepeatMode === 'all' && playOrder && playOrder.length > 0) {
+            rebuildOrderForWrap();
+            playCurrent();
+            return true;
+        }
+
+        playlistEnd();
+        return false;
+    }
+
+    // True while there is anything left to play: queue head, a later order position, or
+    // (with repeat-all) the wrap itself. At order length 1 + repeat-all the wrap replays
+    // the same track — acceptable ("keep playing forever").
+    function playlistHasNext() {
+        if (!listActive) {
             return false;
         }
 
-        listIndex++;
-        playCurrent();
-        return true;
-    }
+        if (listQueue.length) {
+            return true;
+        }
 
-    function playlistHasNext() {
-        return !!listActive && listIndex + 1 < listItems.length;
+        if (playOrder && orderPos + 1 < playOrder.length) {
+            return true;
+        }
+
+        return listRepeatMode === 'all' && !!playOrder && playOrder.length > 0;
     }
 
     function playlistHasPrevious() {
-        return !!listActive && listIndex > 0;
+        return !!listActive && orderPos > 0;
     }
 
     function playlistNext() {
@@ -255,9 +615,29 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
 
         stopCurrentPlayer();
-        listIndex++;
-        playCurrent();
-        return true;
+
+        // Queue first; a queue item becomes the current item and the order walk is left
+        // untouched. Manual Next never replays the current item, even under repeat-one.
+        if (listQueue.length) {
+            playCurrent(true);
+            return true;
+        }
+
+        if (playOrder && orderPos + 1 < playOrder.length) {
+            orderPos++;
+            playCurrent();
+            return true;
+        }
+
+        // At the walk's end with repeat-all, hasNext() was true because of the wrap:
+        // manual Next honours it instead of running orderPos past the array.
+        if (listRepeatMode === 'all' && playOrder && playOrder.length > 0) {
+            rebuildOrderForWrap();
+            playCurrent();
+            return true;
+        }
+
+        return false;
     }
 
     function playlistPrevious() {
@@ -266,9 +646,126 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
 
         stopCurrentPlayer();
-        listIndex--;
+        orderPos--;
         playCurrent();
         return true;
+    }
+
+    /* Playback-mode and session-queue public API. The queues are in-memory only: the
+     * session queue is dropped by endSession(); the pre-session pending queue survives
+     * until playlistStart() adopts it (or it is explicitly cleared). */
+
+    function playlistGetRepeat() {
+        return listRepeatMode;
+    }
+
+    // Accepts only the three enum values; anything else leaves the mode unchanged.
+    function playlistSetRepeat(mode) {
+        if (mode !== 'off' && mode !== 'all' && mode !== 'one') {
+            return listRepeatMode;
+        }
+
+        listRepeatMode = mode;
+        return mode;
+    }
+
+    function playlistIsShuffle() {
+        return listShuffle;
+    }
+
+    // Shuffle ON keeps the current pass (no reset); the shuffle-off rebuild resumes the
+    // pass's ascending not-yet-played remainder: never replays a heard track, never
+    // strands an unheard one. The OFF anchor is the last ORDER-walk position
+    // (lastOrderIndex()), not listIndex — the walk does not move while a queue item
+    // plays, so it is the honest basis even then; it leads the rebuilt order only as the
+    // item already playing (its slot is walked past, never replayed) and it is itself
+    // marked, so the ascending remainder excludes it and everything heard through any
+    // route (walk or queue entry matched by Id). When nothing has been heard yet the
+    // visited set is null and the remainder is every index in ascending order; the
+    // anchor falls back to the current listIndex (or 0) if the walk has not moved at all.
+    function playlistSetShuffle(on) {
+        listShuffle = !!on;
+
+        if (!listActive || !listItems || !listItems.length) {
+            return listShuffle;
+        }
+
+        if (listShuffle) {
+            // Shuffle ON keeps the pass: the visited set is NOT reset (same pass
+            // continues; and per shuffledFromWalk the tail may still hold Id-heard
+            // entries the walk has not reached).
+            playOrder = shuffledFromWalk();
+            orderPos = 0;
+        } else {
+            // Shuffle OFF: anchor first, then the not-yet-played indices ascending.
+            var anchor = lastOrderIndex();
+
+            if (anchor === null || anchor < 0) {
+                anchor = (listIndex >= 0) ? listIndex : 0;
+            }
+
+            playOrder = [anchor];
+
+            for (var ov = 0; ov < listItems.length; ov++) {
+                if (ov !== anchor && (!passVisited || !passVisited[ov])) {
+                    playOrder.push(ov);
+                }
+            }
+
+            orderPos = 0;
+        }
+
+        return listShuffle;
+    }
+
+    // Returns a copy: callers can never mutate the live queue through the returned array.
+    // With no active session the PENDING queue is the visible one — it is what the next
+    // start adopts, so the audio card's Queue: n label is always meaningful.
+    function playlistGetQueue() {
+        return (listActive ? listQueue : pendingQueue).slice();
+    }
+
+    // Head-insert (plays before everything else already queued). A session active: into
+    // listQueue (as before). No session: into the pending queue, which the next start
+    // adopts head-first. Returns the resulting combined queue depth so a caller can show
+    // it (0 also reads as falsy for anything still expecting the old boolean contract).
+    function playlistPlayNext(item) {
+        if (!item) {
+            return 0;
+        }
+
+        if (listActive) {
+            listQueue.unshift(item);
+        } else {
+            pendingQueue.unshift(item);
+        }
+
+        return listQueue.length + pendingQueue.length;
+    }
+
+    function playlistAppendQueue(item) {
+        if (!item) {
+            return 0;
+        }
+
+        if (listActive) {
+            listQueue.push(item);
+        } else {
+            pendingQueue.push(item);
+        }
+
+        return listQueue.length + pendingQueue.length;
+    }
+
+    // Active session: clear the session queue (as before). No session: clear the pending
+    // queue. Never touches the queue the other state owns.
+    function playlistClearQueue() {
+        if (listActive) {
+            listQueue = [];
+            return;
+        }
+
+        pendingQueue = [];
     }
 
     /* In-app user-built playlists (Scope A). Three preset slots, keyed by server id in
@@ -291,7 +788,21 @@ var Michelly = window.Michelly = window.Michelly || {};
     var plServerId = null;
 
     function setServerId(id) {
-        plServerId = id || null;
+        var next = id || null;
+        var changed = !!(next && plServerId && next !== plServerId);
+
+        plServerId = next;
+
+        // A server switch invalidates the pending queue: its entries carry the OLD
+        // server's Ids, and adopting them on the new server would fail PlaybackInfo and
+        // kill the user's session with an error. Only a real identity change clears it
+        // (re-connecting the same server, or a null/absent id, must not lose the queue).
+        // An ACTIVE session across a switch is already impossible: the connect flow
+        // resets the views before afterConnect runs. listQueue needs no clearing here —
+        // it dies with endSession anyway.
+        if (changed) {
+            pendingQueue = [];
+        }
     }
 
     // Manage-view UI state (module-level, reset on every entry into the view).
@@ -505,10 +1016,15 @@ var Michelly = window.Michelly = window.Michelly || {};
         return count + (count === 1 ? ' track' : ' tracks');
     }
 
-    /* Add-from-item inline slot picker. It is rendered into a container inside the item view and
-     * pushed onto the back stack exactly once; ui.handleBack() pops before invoking, so the
-     * pushed handler must not pop, and the on-screen Cancel / slot choice (and a Play press that
-     * starts a session over an open picker) pop it themselves. */
+    /* Add-from-item inline actions menu (the slot picker generalized into a per-item action
+     * sheet). It is rendered into a container inside the item view and pushed onto the back
+     * stack exactly once; ui.handleBack() pops before invoking, so the pushed handler must not
+     * pop, and the on-screen Cancel / choices (and a Play press that starts a session over an
+     * open menu) pop it themselves. The menu has two steps in the SAME container — step 1
+     * (Play next / Add to queue / Add to playlist / [Open album] / Cancel) and step 2 (slot
+     * rows) — and
+     * deliberately pushes NO second handler on the step transition: step-2 rows hand the
+     * container back to step 1 or pop the one entry themselves. */
 
     function closePlaylistPicker(pickerEl, anchorEl, popHandler) {
         if (popHandler) {
@@ -522,7 +1038,12 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
     }
 
-    function openPlaylistPicker(pickerEl, statusEl, anchorEl, item) {
+    // Step 2 of the actions menu: the slot rows. Renders into the container WITHOUT pushing a
+    // back handler and without seeding focus (both stay with the stack owner). The slot labels,
+    // the Id duplicate guard and the outcome texts are byte-faithful from the former
+    // openPlaylistPicker. reopenMenu (actions menu only) adds the Back-to-actions row that
+    // re-renders step 1 into the same container while the one menu entry stays on the stack.
+    function renderPlaylistSlotRows(pickerEl, statusEl, anchorEl, item, reopenMenu) {
         ui().clear(pickerEl);
 
         var slots = listSlots();
@@ -542,6 +1063,131 @@ var Michelly = window.Michelly = window.Michelly || {};
             })(i);
         }
 
+        // Step-transition row: hands the container back to step 1 without a pop or a push.
+        if (reopenMenu) {
+            var backRow = ui().el('button', 'playlist-pick-btn', 'Actions');
+            backRow.type = 'button';
+            backRow.onclick = function () {
+                reopenMenu();
+                return false;
+            };
+            pickerEl.appendChild(backRow);
+        }
+
+        var cancel = ui().el('button', 'playlist-pick-btn playlist-pick-cancel', 'Cancel');
+        cancel.type = 'button';
+        cancel.onclick = function () {
+            closePlaylistPicker(pickerEl, anchorEl, true);
+            return false;
+        };
+        pickerEl.appendChild(cancel);
+    }
+
+    // Step 1 of the actions menu, RENDER-ONLY: clears the container, builds the step-1 rows
+    // (Play next / Add to queue / [Clear queue (n)] / Add to playlist / [Open album] /
+    // Cancel) and seeds focus on the first button. It owns NO back-stack state, so both
+    // the opener below and step 2's Back-to-actions row (reopenMenu) re-render through it
+    // without ever re-pushing. The Clear queue row pre-session is the review/undo surface
+    // for the pending queue (row order: before "Add to playlist" so Cancel stays last).
+    // opt.openAlbum — the album track-list opener (playShelfItem pattern) or null, so the
+    // row only exists when the fetched detail carries AlbumId (visible-only: never a dead
+    // button).
+    function renderItemActionsRows(pickerEl, statusEl, anchorEl, item, opt) {
+        ui().clear(pickerEl);
+
+        var reopenMenu = function () {
+            renderItemActionsRows(pickerEl, statusEl, anchorEl, item, opt);
+        };
+
+        // Play next ALWAYS enqueues: while no session is active the pending queue collects
+        // it, and the next all-Audio playlistStart() adopts it into the live session queue
+        // (FIFO head). This replaces the old "play now" fallback.
+        var playNext = ui().el('button', 'playlist-pick-btn', 'Play next');
+        playNext.type = 'button';
+        playNext.onclick = function () {
+            // Close (pop) the menu's single entry FIRST — the same Play-closes-first rule
+            // the Play button enforces over an open menu.
+            closePlaylistPicker(pickerEl, anchorEl, true);
+
+            var depth = playlistPlayNext(item);
+
+            statusEl.textContent = 'Queued to play next: ' + (item.Name || 'track') +
+                '. (' + depth + ' queued)';
+            statusEl.style.display = '';
+            return false;
+        };
+        pickerEl.appendChild(playNext);
+
+        var addToQueue = ui().el('button', 'playlist-pick-btn', 'Add to queue');
+        addToQueue.type = 'button';
+        addToQueue.onclick = function () {
+            closePlaylistPicker(pickerEl, anchorEl, true);
+
+            var depth = playlistAppendQueue(item);
+
+            statusEl.textContent = 'Added to queue: ' + (item.Name || 'track') +
+                '. (' + depth + ' queued)';
+            statusEl.style.display = '';
+            return false;
+        };
+        pickerEl.appendChild(addToQueue);
+
+        // Pre-session review/undo for the pending queue (write-only before this row):
+        // only rendered when it exists AND no session owns a queue — during an active
+        // session the audio card's overlay owns queue visibility, so this row would only
+        // be a second surface for the same state. Render-only like every step-1 row: the
+        // click re-renders step 1 through the same helper, so the stack delta is +0 and
+        // the menu's single back entry stays untouched.
+        var visibleQueue = playlistIsActive() ? [] : playlistGetQueue();
+
+        if (visibleQueue.length > 0) {
+            var clearQueueRow = ui().el('button', 'playlist-pick-btn',
+                'Clear queue (' + visibleQueue.length + ')');
+
+            clearQueueRow.type = 'button';
+            clearQueueRow.onclick = function () {
+                playlistClearQueue();
+
+                // No stack change: the menu stays open and re-renders step 1 in place
+                // (this helper owns no back-stack state; the opener's single entry lives
+                // on). The anchor keeps its position for the D-pad walk.
+                renderItemActionsRows(pickerEl, statusEl, anchorEl, item, opt);
+                statusEl.textContent = 'Queue cleared.';
+                statusEl.style.display = '';
+                return false;
+            };
+            pickerEl.appendChild(clearQueueRow);
+        }
+
+        var addToPlaylist = ui().el('button', 'playlist-pick-btn', 'Add to playlist');
+        addToPlaylist.type = 'button';
+        addToPlaylist.onclick = function () {
+            // Step transition within the same single back entry: the slot rows replace step 1
+            // in the container; the one menu handler stays untouched on the stack.
+            renderPlaylistSlotRows(pickerEl, statusEl, anchorEl, item, reopenMenu);
+
+            var first = pickerEl.querySelector('button');
+
+            if (first) {
+                first.focus();
+            }
+            return false;
+        };
+        pickerEl.appendChild(addToPlaylist);
+
+        if (opt.openAlbum) {
+            var openAlbum = ui().el('button', 'playlist-pick-btn', 'Open album');
+            openAlbum.type = 'button';
+            openAlbum.onclick = function () {
+                // Same discipline as Play next: leave the menu (pop its single entry) before
+                // the navigation changes the view.
+                closePlaylistPicker(pickerEl, anchorEl, true);
+                opt.openAlbum();
+                return false;
+            };
+            pickerEl.appendChild(openAlbum);
+        }
+
         var cancel = ui().el('button', 'playlist-pick-btn playlist-pick-cancel', 'Cancel');
         cancel.type = 'button';
         cancel.onclick = function () {
@@ -550,17 +1196,27 @@ var Michelly = window.Michelly = window.Michelly || {};
         };
         pickerEl.appendChild(cancel);
 
-        // One back entry for the picker only: hardware Back clears it and nothing else. It does
-        // not pop (handleBack already popped), mirroring the playlist-start handler convention.
-        ui().pushBackHandler(function () {
-            closePlaylistPicker(pickerEl, anchorEl, false);
-        });
-
+        // Render-only: focus belongs with the rows that were just built.
         var first = pickerEl.querySelector('button');
 
         if (first) {
             first.focus();
         }
+    }
+
+    // Step-1 opener: the ONLY push site in the whole menu lifecycle. It delegates the
+    // rendering to renderItemActionsRows() and pushes the menu's single back entry exactly
+    // once; step transitions re-render through the render-only helper and never touch the
+    // stack, so every close path pops exactly one entry.
+    function openItemActionsMenu(pickerEl, statusEl, anchorEl, item, opt) {
+        renderItemActionsRows(pickerEl, statusEl, anchorEl, item, opt);
+
+        // One back entry for the WHOLE two-step menu: hardware Back clears it and nothing
+        // else. It does not pop (handleBack already popped), mirroring the playlist-start
+        // handler convention.
+        ui().pushBackHandler(function () {
+            closePlaylistPicker(pickerEl, anchorEl, false);
+        });
     }
 
     function showPickerStatus(statusEl, result, index) {
@@ -1472,11 +2128,11 @@ var Michelly = window.Michelly = window.Michelly || {};
         var play = ui().el('button', 'primary', 'Play');
         play.type = 'button';
         play.onclick = function () {
-            // An inline slot picker can be open on audio items; close it FIRST (popping its
-            // single back handler) so playback starts from a clean stack and no stale picker
+            // An inline actions menu can be open on audio items; close it FIRST (popping its
+            // single back handler) so playback starts from a clean stack and no stale menu
             // widgets remain in the D-pad walk behind the player view.
             if (plPicker && plPicker.firstChild) {
-                closePlaylistPicker(plPicker, addToPlaylist, true);
+                closePlaylistPicker(plPicker, moreActions, true);
             }
 
             // A list-opened item plays as an ordered session; a list-less item (series
@@ -1504,9 +2160,10 @@ var Michelly = window.Michelly = window.Michelly || {};
             actions.appendChild(episodes);
         }
 
-        // User playlists: only audio items are addable (Scope A). The button sits after Play and
-        // opens an inline slot picker rendered under the actions; both nodes are rebuilt on every
-        // renderItem, so a stale picker can never survive into another item.
+        // User playlists: only audio items are addable (Scope A). The More button sits after
+        // Play and opens an inline two-step actions menu (Play next / Add to queue / Add to
+        // playlist / [Open album] / Cancel) rendered under the actions; both nodes are
+        // rebuilt on every renderItem, so a stale menu can never survive into another item.
         var plStatus = null;
         var plPicker = null;
 
@@ -1516,20 +2173,36 @@ var Michelly = window.Michelly = window.Michelly || {};
 
             plPicker = ui().el('div', 'playlist-picker');
 
-            var addToPlaylist = ui().el('button', 'secondary', 'Add to playlist');
-            addToPlaylist.type = 'button';
-            addToPlaylist.onclick = function () {
-                // Toggle: a second press collapses an open picker and pops its back entry, so
-                // the picker can never leave more than one handler on the stack.
+            var moreActions = ui().el('button', 'secondary', 'More');
+            moreActions.type = 'button';
+            moreActions.onclick = function () {
+                // Toggle: a second press collapses an open menu and pops its back entry, so
+                // the menu can never leave more than one handler on the stack.
                 if (plPicker.firstChild) {
-                    closePlaylistPicker(plPicker, addToPlaylist, true);
+                    closePlaylistPicker(plPicker, moreActions, true);
                     return false;
                 }
 
-                openPlaylistPicker(plPicker, plStatus, addToPlaylist, item);
+                openItemActionsMenu(plPicker, plStatus, moreActions, item, {
+                    // Open album reuses the playShelfItem pattern for a MusicAlbum's track
+                    // list; offered only when the fetched detail carries AlbumId.
+                    openAlbum: item.AlbumId ? function () {
+                        openItems(item.AlbumId, userId, {
+                            title: item.Album || 'Album',
+                            ParentId: item.AlbumId,
+                            Recursive: false,
+                            IncludeItemTypes: 'Audio',
+                            Fields: 'PrimaryImageAspectRatio',
+                            back: function () {
+                                openItem(item.Id, userId, back);
+                            }
+                        });
+                        return false;
+                    } : null
+                });
                 return false;
             };
-            actions.appendChild(addToPlaylist);
+            actions.appendChild(moreActions);
         }
 
         info.appendChild(actions);
@@ -1539,7 +2212,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         itemError.style.display = 'none';
         info.appendChild(itemError);
 
-        // Inline add-to-playlist status + slot picker (only rendered for audio items). Kept as
+        // Inline actions-menu status + menu container (only rendered for audio items). Kept as
         // per-render nodes so navigating away tears them down with the rest of the item view.
         if (plStatus && plPicker) {
             info.appendChild(plStatus);
@@ -2640,6 +3313,12 @@ var Michelly = window.Michelly = window.Michelly || {};
         setConfig: musicSetConfig
     };
 
+    // Numeric returns on the queue calls: playNext / appendQueue / clearQueue return the
+    // resulting COMBINED queue depth (session + pending; clearQueue itself returns
+    // nothing meaningful), and getQueue returns a COPY of whichever queue is visible
+    // (active session → listQueue, otherwise pendingQueue). Pre-session rows ("Play
+    // next" / "Add to queue", labels locked by the acceptance criteria) fill the pending
+    // queue that the next all-Audio session adopts.
     namespace.playlist = {
         isActive: playlistIsActive,
         start: playlistStart,
@@ -2648,7 +3327,15 @@ var Michelly = window.Michelly = window.Michelly || {};
         previous: playlistPrevious,
         hasNext: playlistHasNext,
         hasPrevious: playlistHasPrevious,
-        stop: playlistEnd
+        stop: playlistEnd,
+        getRepeat: playlistGetRepeat,
+        setRepeat: playlistSetRepeat,
+        isShuffle: playlistIsShuffle,
+        setShuffle: playlistSetShuffle,
+        getQueue: playlistGetQueue,
+        playNext: playlistPlayNext,
+        appendQueue: playlistAppendQueue,
+        clearQueue: playlistClearQueue
     };
 
     // User-built playlist slots (plural). The session API above is untouched; this is the
