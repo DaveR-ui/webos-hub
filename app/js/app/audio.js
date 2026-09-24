@@ -580,17 +580,24 @@ var Michelly = window.Michelly = window.Michelly || {};
 
         var card = ui().el('div', 'audio-now');
 
+        // Row body: the content stage on the left and the queue panel on the right. The
+        // bottom-docked playback bar lives outside this row, so it always sits at the
+        // bottom of the view (see .audio-bar in app.css).
+        var body = ui().el('div', 'audio-body');
+
+        var stage = ui().el('div', 'audio-stage');
+
         var posterWrap = ui().el('div', 'audio-poster');
         var img = document.createElement('img');
         img.alt = item.Name || '';
         posterWrap.appendChild(img);
-        card.appendChild(posterWrap);
+        stage.appendChild(posterWrap);
 
         var tag = item.ImageTags && item.ImageTags.Primary;
         ui().renderImage(img, tag ? api().imageUrl(item.Id, 'Primary', { maxWidth: 480, tag: tag }) : null, item.Name || '');
 
-        // Info + controls column: sits beside the album art in the row card and wraps
-        // below it when the card is too narrow for two columns.
+        // Info column: title / artist / album only. The progress bar, time readout and
+        // transport/mode controls moved into the bottom-docked .audio-bar below.
         var detail = ui().el('div', 'audio-detail');
 
         detail.appendChild(ui().el('div', 'audio-title', item.Name || 'Untitled'));
@@ -605,17 +612,24 @@ var Michelly = window.Michelly = window.Michelly || {};
             detail.appendChild(ui().el('div', 'audio-album', item.Album));
         }
 
+        // The detail column holds only title / artist / album; the progress bar, time
+        // readout and transport/mode controls live in the bottom-docked .audio-bar.
+        stage.appendChild(detail);
+
+        // Bottom-docked playback bar: progress, time, transport and mode controls.
+        var bar = ui().el('div', 'audio-bar');
+
         // Read-only seek/progress indicator, mirroring the video player's .player-progress.
         // Driven by the same timeupdate/loadedmetadata events that refresh #audioTime.
         var progress = ui().el('div', 'audio-progress');
         var progressFill = ui().el('div', 'audio-progress-fill');
         progressFill.id = 'audioProgressFill';
         progress.appendChild(progressFill);
-        detail.appendChild(progress);
+        bar.appendChild(progress);
 
         var time = ui().el('div', 'audio-time', '0:00 / 0:00');
         time.id = 'audioTime';
-        detail.appendChild(time);
+        bar.appendChild(time);
 
         // Primary transport row: Prev / Play / Next side by side, Play visually dominant.
         var transport = ui().el('div', 'audio-transport');
@@ -690,7 +704,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             namespace.playlist.next();
         };
         transport.appendChild(next);
-        detail.appendChild(transport);
+        bar.appendChild(transport);
 
         // Secondary playback-mode row: Repeat / Shuffle / Queue. Visually secondary but
         // still focusable and never disabled (dimmed via .is-inert at boundaries only).
@@ -760,9 +774,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             return false;
         };
         modes.appendChild(queueBtn);
-        detail.appendChild(modes);
-
-        card.appendChild(detail);
+        bar.appendChild(modes);
 
         // Queue overlay container: built once per card, hidden by default. Overlay state
         // does not survive a card rebuild — play() always rebuilds with it closed, which
@@ -817,7 +829,12 @@ var Michelly = window.Michelly = window.Michelly || {};
         };
         queueBox.appendChild(closeBtn);
 
-        card.appendChild(queueBox);
+        body.appendChild(queueBox);
+
+        // DOM order is .audio-body (content stage + right queue panel) then .audio-bar,
+        // so the D-pad walk reaches the queue panel's Clear/Close before the bar controls.
+        card.appendChild(body);
+        card.appendChild(bar);
 
         view.appendChild(card);
 

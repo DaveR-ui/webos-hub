@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "bundleVersion": "e0ff37c9c0fbdc27",
+  "bundleVersion": "13c9ad5d686430d7",
   "appVersion": "1.3.5",
   "files": [
     {
@@ -30,8 +30,8 @@
     {
       "path": "js/app/catalog.js",
       "type": "js",
-      "size": 173232,
-      "sha256": "4a4fa7e951a5acf39b6f025e47d3d4eeacf05f63bfda985d104158ad16edf33e"
+      "size": 178091,
+      "sha256": "70851936836a817a337ad0625fccbf79f1a29b34a10300ddfc07e2dd3e7de87c"
     },
     {
       "path": "js/app/player.js",
@@ -42,8 +42,8 @@
     {
       "path": "js/app/audio.js",
       "type": "js",
-      "size": 32922,
-      "sha256": "1b2b676c0146c1cbb18964e42a0178833a4843141b5ec00e3c5cf52609b6f249"
+      "size": 33816,
+      "sha256": "15280e5244f8440b16db4a65624016d5d8e93f2bf78c3397198f70a152191add"
     },
     {
       "path": "js/index.js",
@@ -54,8 +54,8 @@
     {
       "path": "css/app.css",
       "type": "css",
-      "size": 37836,
-      "sha256": "1c2c69de7e663dbb48579f1d682feea9caca1e5e654fa1451042f1beacd7ebc9"
+      "size": 39859,
+      "sha256": "62d28491c043eb5114f85556a0169b1eda2dd26ee48fdb0a5162a1fc44d44ef2"
     }
   ]
 }
