@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-23
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse), native playback (ordered-list sessions with playback modes and an in-memory queue, and user-built saved playlists), and the bundled Luna discovery service.
-tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, music, artist, luna, discovery, d-pad, media-server]
-version: 2.7
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse with browse dimensions and functional search), native playback (ordered-list sessions with playback modes and an in-memory queue, and dynamic named user playlists with lazy legacy migration), the two-column audio now-playing card, and the bundled Luna discovery service.
+tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, music, artist, browse-dimensions, search, luna, discovery, d-pad, media-server]
+version: 2.8
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -40,9 +40,9 @@ loader — the verified remote payload when reachable, the packaged copies other
 | `frontend/js/app/api.js` | ES5 XHR media-server REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** Remote payload. |
 | `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; the tri-state default user (`michelly_default_user`) for automatic sign-in; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** Remote payload. |
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** Remote payload. |
-| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the saved-playlist store (`michelly_playlists`) and its manage view (`Michelly.playlists`). **Fork-only.** Remote payload. |
+| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the artist-centric music browse (`Michelly.music`: browse dimensions, functional search, shelves), the dynamic named-playlist store (`michelly_playlists_v2`, with the legacy `michelly_playlists` key read-only) and its manage view (`Michelly.playlists`). **Fork-only.** Remote payload. |
 | `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Prev / Play/Pause / Next buttons, time readout, progress bar), play/pause, list-aware auto-advance, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
-| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: now-playing card (Prev / Play/Pause / Next + session-scoped Repeat / Shuffle / Queue controls with the inline queue overlay), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
+| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: two-column now-playing card (dominant album art + an info/controls column with Prev / Play/Pause / Next, a read-only `.audio-progress` bar and the session-scoped Repeat / Shuffle / Queue controls with the inline queue overlay), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow (auto-connect from the stored `baseurl`, session-first + default-user auto-login), the runtime-built default-user settings view, main key/Back handling. Remote payload. |
 | `frontend/css/main.css` | Picker and shared control styling. |
 | `frontend/css/app.css` | Native view / catalog / player / audio now-playing styling (flexbox only). **Fork-only.** Remote payload. |
@@ -256,16 +256,33 @@ library keeps the folder-grouped card grid above.
 
 **Music home (`#musicView`, runtime-built).** Built in JS on the `ensurePlaylistsView` pattern (the
 shell `index.html` is untouched), it is a static, non-tabbable left rail plus a top bar (**Back** +
-library title + a static, visual-only search field), six filter chips (`All`, `A-F`, `G-M`, `N-T`,
-`U-Z`, `Folders`), a **Jump back in** shelf and a wrapped artist card grid.
+library title + a **real, tabbable search field** — an inline `<input>` plus a **Search** button, not
+the old visual-only div), nine filter chips (`All`, `A-F`, `G-M`, `N-T`, `U-Z`, `Genres`, `Albums`,
+`Songs`, `Folders`), three shelves and a wrapped artist card grid.
 
-- The **shelf** reuses the existing Resume endpoint (`Michelly.api.getResume`), keeps the playable
-  music entries (`Audio`/`MusicAlbum`, max 8) and is hidden entirely when empty or on failure.
+- The **shelves** are **Jump back in**, **Recently added** and **Most played**. Jump back in reuses
+  the existing Resume endpoint (`Michelly.api.getResume`), keeps the playable music entries
+  (`Audio`/`MusicAlbum`, max 8); Recently added fetches `SortBy=DateCreated` (Descending, max 8) and
+  Most played fetches `SortBy=PlayCount` + `Filters=IsPlayed` (Descending, max 8). Each shelf renders
+  only when non-empty and a failure hides only its own band.
 - The **`Folders` chip is navigation, not a filter**: it opens the **existing** folder-grouped browse
   unchanged, with Back returning to the music home.
 - The letter chips filter the loaded page client-side by `SortName`/`Name` first letter; **Show more**
   pages the artist list (100 per page) when the server reports more, reusing the artists-fetch variant
   that actually returned rows (see the data model below).
+- The **`Genres` / `Albums` / `Songs` chips** are browse **dimensions** (not letter filters): each is
+  fetched lazily on first selection and cached on `musicHome.dimensionCache`, then re-rendered in
+  place. Albums → `IncludeItemTypes=MusicAlbum`; Songs → `IncludeItemTypes=Audio`; Genres → a page of
+  `Audio` items from which the genre names are **derived client-side** (`collectGenres` unions the
+  items' `Genres` arrays and sorts them), because `api.getItems` exposes no `Genres` query param and
+  `api.js` was off-limits. Selecting a genre drills into the songs carrying it (one pushed back
+  handler); a **Retry** affordance appears on a failed dimension fetch. All three dimensions fetch a
+  **bounded window of 500 items with no `Show more` pager yet** — see the open follow-ups below.
+- **Search is functional.** A term is sent to `/Items` as `SearchTerm`
+  (`IncludeItemTypes=Audio,MusicAlbum,MusicArtist`, limit 100) and the results **replace the whole
+  content area** until cleared; a **Clear search** button returns to the normal artist grid. Enter in
+  the field submits like the Search button. A search resets the browse dimension, so a cleared search
+  never falls back into a stale genre drill-down.
 
 **Artist detail (`#artistView`, runtime-built).** Three sections, in this order: **Albums**, **Singles
 and EPs**, **Favorites**. An album row opens the album through the generic items view (so its tracks
@@ -328,8 +345,17 @@ Left/Right are [no-ops](#assuming-leftright-moves-focus). Focus is seeded into t
 each render.
 
 **Increment 2 (planned, not implemented).** A bottom now-playing bar, an app-global persistent rail, a
-right contextual panel, a hero gradient band, "Recommended Stations", functional server search and
-genre chips are **not** part of this change.
+right contextual panel, a hero gradient band and "Recommended Stations" are **not** part of this
+change. Functional search and the genre/album/song browse dimensions **have** since landed (see the
+music home above); the audio now-playing card's two-column layout and progress bar are a separate
+workstream, not an AIMP tier.
+
+**Open follow-ups (pending).**
+- The `Genres` / `Albums` / `Songs` dimension fetch is a **bounded ~500-item window with no `Show
+  more` pager yet** — a continuation/pager is a deliberate follow-up.
+- Search results are capped at 100 items with no pager.
+- All of the above are **implemented but statically validated only** and remain **pending on-device
+  verification** (see the deployment status below).
 
 ### Native playback
 
@@ -479,7 +505,7 @@ wrap/end.
 Modes are **per session**: `start()` resets them and rebuilds the identity `playOrder` at the tapped
 index; `endSession()` clears them with the teardown.
 
-**Queues are in-memory only — never `localStorage`, `michelly_playlists` untouched.**
+**Queues are in-memory only — never `localStorage`; the saved-playlist stores are untouched.**
 
 - The **session queue `listQueue`** (head first): `playNext()` head-inserts ('Play next'),
   `appendQueue()` appends ('Add to queue'). `advance()`/`next()` consume the head **before** the mode
@@ -537,36 +563,51 @@ an auto-advance reaches the session, never a dead press.
 
 #### Saved playlists (`Michelly.playlists`)
 
-Users build up to **three preset playlist slots** on the TV ("Playlist 1/2/3" — fixed names, no
-rename, no user typing) and replay them through the session model above. `frontend/js/app/catalog.js`
-owns the store, the add-from-item actions menu and the manage view; there is **no** `api.js` call —
-server-side playlists are out of scope, the store is fork-owned and TV-only.
+Users build **dynamic named playlists** on the TV (create / rename / delete, reorder, per-item
+soft-disable) and replay them through the session model above. `frontend/js/app/catalog.js` owns the
+store, the add-from-item actions menu and the manage view; there is **no** `api.js` call — server-side
+playlists are out of scope, the store is fork-owned and TV-only.
 
-**Store (`michelly_playlists`, per-server).** The `localStorage` key maps the server **id** (wired
-per connect — see **Keying** below) to `{ slots: [ [entry…], [], [] ] }` — exactly three arrays. An
-entry carries
-only what the row renderer and the audio player need: `{Id, Type, Name, ImageTags?{Primary}}`. Only
-`Type === 'Audio'` items are addable — the picker is rendered on audio items only, and
-`normalizeSlots` drops any non-Audio entry on read, so a foreign entry can never misroute to the
-video player. Duplicate adds are guarded by `Id` (`addToSlot` returns `'added'` / `'duplicate'` /
-`'error'`). Corruption is isolated **per key**: a missing/corrupt record for one server resets only
-that server's slots (a malformed top-level blob counts as an empty store). A failed write (quota /
-disabled storage) returns `false` and every caller surfaces `Could not save the playlist.` — never
-silent. **Keying:** identical to `michelly_sessions` — the `System/Info/Public` `Id`, set once per
-connect by `afterConnect` in `frontend/js/index.js` through `Michelly.playlists.setServerId(id)`.
-The stable server Id wins over the address: **address/port changes no longer orphan the slots**;
-orphaning needs the server's own Id to change (reinstall/reset) — the same lifetime as the session
-store. This replaced the original baseUrl keying **pre-publish**, so no migration shim is needed or
-shipped — no device ever held baseUrl-keyed data. Without a wired id (before `afterConnect`, or a
-server reporting no Id), reads behave like absent data (fresh empty slots) and writes fail like a
-storage error — a falsy `''` key is never persisted.
+**Store (`michelly_playlists_v2`, per-server).** The **additive** `localStorage` key maps the server
+**id** (wired per connect — see **Keying** below) to
+`{ playlists: [ {id, name, items:[entry…]} ] }`. An entry carries only what the row renderer and the
+audio player need: `{Id, Type, Name, ImageTags?{Primary}}`, plus an optional `Disabled: true`
+soft-disable flag. Only `Type === 'Audio'` items are addable — the picker is rendered on audio items
+only, and `normalizePlaylist` drops any non-Audio entry on read, so a foreign entry can never misroute
+to the video player. Duplicate adds are guarded by `Id` (`addItemToPlaylist` returns `'added'` /
+`'duplicate'` / `'error'`). Corruption is isolated **per playlist** and **per entry**: a malformed
+playlist record is dropped without destroying its siblings, and a bad entry is dropped without
+destroying its playlist. A failed write (quota / disabled storage) returns `false` and every caller
+surfaces `Could not save the playlist.` — never silent.
 
-**Public surface.** `Michelly.playlists` — `setServerId(id)` (the store key, wired once per
-connect), `listSlots()` (`[{name, count}]` for this server),
-`getSlotItems(i)` (a copy, never a live reference into storage), `addToSlot(i, item)`,
-`removeAt(i, position)`, `clearSlot(i)` — is the storage surface only, distinct from
-`Michelly.playlist` (the session API above, still catalog-owned). The manage view reads through
-`playlists` and plays through `playlist.start`.
+**Legacy store is read-only + lazy lossless migration.** The pre-Tier-3 `michelly_playlists` key
+(`{slots:[[…],[…],[…]]}`, exactly three fixed slots) is **never written or deleted again** — a
+downgrade to an older build therefore still finds the original 3-slot records intact and cannot lose
+TV-side playlists. A v2 record **missing** for a server is migrated **in memory** on every read from
+the legacy store until the first mutation persists it: the three slots become three named playlists
+with **stable, deterministic ids** `pl-legacy-1/2/3` (deterministic on purpose — migration is
+recomputed in memory on every read, so a reader that renders an id and a later click that resolves one
+must see the same id). A valid legacy record always yields three playlists (`Playlist 1/2/3`) carrying
+each slot's items; no valid legacy record at all (fresh install, or a corrupt/missing one) yields **no
+playlists** — the user creates their own. An empty v2 `playlists` array is **valid** and is never
+re-migrated (a user who deleted every playlist must not get the legacy three back).
+
+**Keying.** Identical to `michelly_sessions` — the `System/Info/Public` `Id`, set once per connect by
+`afterConnect` in `frontend/js/index.js` through `Michelly.playlists.setServerId(id)`. The stable
+server Id wins over the address: **address/port changes no longer orphan the playlists**; orphaning
+needs the server's own Id to change (reinstall/reset) — the same lifetime as the session store.
+Without a wired id (before `afterConnect`, or a server reporting no Id), reads behave like absent data
+(fresh empty playlists) and writes fail like a storage error — a falsy `''` key is never persisted.
+
+**Public surface.** `Michelly.playlists` — `setServerId(id)` (the store key, wired once per connect),
+the dynamic surface `listPlaylists()` (`[{id, name, count}]`), `getPlaylistItems(id)` (a copy, never a
+live reference into storage), `createPlaylist(name)`, `renamePlaylist(id, name)`, `deletePlaylist(id)`,
+`movePlaylistItem(id, from, to)`, `setItemDisabled(id, position, disabled)`, `addItemToPlaylist(id,
+item)`, `removePlaylistItem(id, position)` — plus the **legacy index-based aliases** (`listSlots`,
+`getSlotItems`, `addToSlot`, `removeAt`, `clearSlot`) kept as thin wrappers over the same dynamic
+model so documented contracts (including the `Id` duplicate guard and outcome strings) survive
+unchanged. This is the storage surface only, distinct from `Michelly.playlist` (the session API above,
+still catalog-owned). The manage view reads through `playlists` and plays through `playlist.start`.
 
 **Add from the item view (the "More" actions menu).** For `Type === 'Audio'` items only, `renderItem`
 renders a **More** button right after Play; grouped music browse reaches it because those cards route
@@ -575,28 +616,32 @@ actions menu** rendered into a container under the actions. Step 1 rows, in orde
 (head-insert), **Add to queue** (append), **Clear queue (n)** (shown only pre-session while the
 pending queue is non-empty — the review/undo surface; it clears and re-renders step 1 in place), **Add
 to playlist**, **Open album** (only when the fetched detail carries `AlbumId` — visible-only, never a
-dead button) and **Cancel**. **Add to playlist** moves to step 2 — the existing 3-slot picker
-(slot buttons with live counts, an **Actions** row back to step 1, **Cancel**), rendered inline by the
-push-free `renderPlaylistSlotRows`. The WHOLE interaction owns **exactly one** back handler:
+dead button) and **Cancel**. **Add to playlist** moves to step 2 — the playlist picker (playlist
+buttons with live counts, an **Actions** row back to step 1, **Cancel**), rendered inline by the
+push-free renderer. The WHOLE interaction owns **exactly one** back handler:
 `openItemActionsMenu` is the sole push site, step transitions are render-only, and every close path
 pops that one entry (same convention as the session handler — `ui.handleBack()` pops before invoking,
 so the pushed handler must not pop). A **Play** press closes an open menu first, so a session never
 starts over a stacked handler. Queue rows fill the in-memory queue per
 [Ordered list playback](#ordered-list-playback-michellyplaylist) and report depth in the item view's
 inline `.playlist-status` line — `Queued to play next: <name>. (N queued)` / `Added to queue: <name>.
-(N queued)` / `Queue cleared.`; slot adds keep the existing outcomes (`Added to …` / `Already in …` /
+(N queued)` / `Queue cleared.`; playlist adds keep the existing outcomes (`Added to …` / `Already in …` /
 `Could not save the playlist.`), the `Id` duplicate guard and the write-error semantics **unchanged**.
 Menu buttons are real `<button>`s and are **never disabled**.
 
 **Manage view (`#playlistsView`).** Runtime-built on the `ensureSettingsView` pattern —
 `ensurePlaylistsView()` appends a `<div class="view">` to `<body>`, so the shell `index.html` is
 untouched and the view ships in the payload. Entry point: the **Playlists** button in the Views
-header, beside Continue Watching. The slot list shows the three slots with counts; per slot **Play**
-and **Clear** (Clear arms a two-step inline Yes/No confirm), and a slot detail (per-track **Remove**
-+ on-screen **Back**) is a lower level of the same view with one pushed back handler, so hardware
-Back returns to the slot list. Empty-slot Play/Clear no-op with a status line — the buttons stay
-focusable and are never `disabled` (the same D-pad rule as Prev/Next). **Reorder is deferred** — not
-in v1.
+header, beside Continue Watching. The playlist list shows one row per playlist (the name opens its
+detail; per row **Play** / **Rename** / **Delete**) plus a **New playlist** button; Delete arms a
+two-step inline Yes/No confirm, and Create/Rename open an inline text editor (`openPlaylistEditor`).
+The playlist **detail** is a lower level of the same view with one pushed back handler, so hardware
+Back returns to the playlist list: per track **Move up** / **Move down** (**reorder** — the previous
+"reorder deferred" decision is now lifted), **Disable** / **Enable** (soft-disable; Play skips
+`Disabled === true` tracks), **Remove**, plus an on-screen **Back**. Boundary Move buttons dim
+(`is-inert`) but stay focusable no-ops, and a focus anchor (`plFocus`) keeps the D-pad on the acted row
+across the re-render. Empty-playlist Play and all-disabled Play no-op with a status line — the buttons
+stay focusable and are never `disabled` (the same D-pad rule as Prev/Next).
 
 **Session-core change (the one load-bearing edit).** `Michelly.playlist.start(items, index, userId,
 returnTarget)` gained an optional 4th argument — a view-id string **or** a function; when omitted
@@ -619,6 +664,11 @@ foreign node — the mirror never writes or clears it. Because `renderItem` crea
 lazily, `ensureItemErrorSlot()` pre-creates it, so a fresh launch (Playlists → Play without ever
 opening an item) cannot silently discard the message.
 
+**Open follow-up (pending human confirmation).** A server with **no legacy record** now shows an
+**empty playlist list** with a **New playlist** button instead of three empty `Playlist 1/2/3` slots —
+a deliberate behaviour change from the fixed 3-slot model; confirm it is wanted on device.
+
+
 #### Audio playback
 
 Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio.js`:
@@ -627,10 +677,16 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
   `Michelly.audio.play(item, userId)`, everything else → `Michelly.player.play(…)`. This fixes the
   pre-existing bug where an audio item was opened in the video player (`/Videos/{id}/stream`).
 - `audio.play()` pushes one back handler **unless a list session is active** (`listMode()`; the playlist
-  already owns the entry), shows `#audioView` and renders the now-playing card
-  (`.audio-now`: poster, title, artist, album, `#audioTime`, the Prev/Next `audio-skip` buttons and the
-  `#audioToggle` Play/Pause button), then runs `POST /Items/{id}/PlaybackInfo` and picks the first
-  direct-stream/direct-play source.
+  already owns the entry), shows `#audioView` and renders the now-playing card. The card (`.audio-now`)
+  is **two-column**: a dominant album-art `.audio-poster` plus an `.audio-detail` info/controls column
+  (title, artist, album, a read-only `.audio-progress` bar, `#audioTime`, the Prev/Next `audio-skip`
+  buttons and the `#audioToggle` Play/Pause button), then runs `POST /Items/{id}/PlaybackInfo` and picks
+  the first direct-stream/direct-play source.
+- The **`.audio-progress` bar is display-only** — it mirrors the video player's `.player-progress`.
+  `#audioProgressFill`'s width is set as a percentage, guarded against `NaN`/`0`/`Infinity` durations,
+  and refreshed by the same `timeupdate`/`loadedmetadata` events that update `#audioTime`. **Interactive
+  scrubbing is out of scope**: Left/Right are intentional D-pad no-ops (see
+  [D-pad and Back](#d-pad-and-back)), so there is no seek affordance.
 - `#playerAudio.src = api.audioStreamUrl(itemId, source.Id, container, audioCodec)` →
   `/Audio/{itemId}/stream?static=true&container=…|audioCodec=…&MediaSourceId=…` — a **direct stream,
   no transcode**. Jellyfin 10.10+ rejects a bare `/stream`, so the first container token is always
@@ -658,14 +714,18 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
   support is Chrome 56+, and the app direct-streams, so a flac item fails to play. See
   [webos-3-compatibility](webos-3-compatibility.md#audio-codec-reality-on-chromium-38).
 
-**Deployment status (important).** The audio player, the video overlay, the ordered-list session and
-the thin loader are all **committed on `master`**. Payload files reach the TV only through the
-regenerated bundle — CI runs `npm run bundle` and publishes `app/` to `gh-pages` on every `master`
-push (see [thin loader / remote bundle](#thin-loader--remote-bundle)); local-shell changes reach it
-only through a new IPK via the manual HBC refresh. The saved-playlists feature (`Michelly.playlists`,
-`#playlistsView`) **ships with this change**: it touches payload files only
-(`js/app/catalog.js`, `js/index.js`, `css/app.css`), so it goes live on the TV's next launch after
-this commit's CI publish — **no IPK rebuild**.
+**Deployment status (important).** **Tier 1** (playback modes, queue, generalized item-actions menu)
+is **committed on `master`** at HEAD `0e86bd7`. **Tier 2** (music browse dimensions + shelves +
+functional search), **Tier 3** (dynamic named playlists with lazy legacy migration) and the **audio
+visual identity** (two-column now-playing card + display-only progress bar) are **implemented but
+UNCOMMITTED** in the working tree. They were validated **statically only** — `npm run check` green, a
+reviewer approval and tester gates — and have **not** been run on a device/emulator: treat the new
+capabilities as **implemented, pending on-device verification**, not as proven on the TV. Payload files
+reach the TV only through the regenerated bundle — CI runs `npm run bundle` and publishes `app/` to
+`gh-pages` on every `master` push (see [thin loader / remote bundle](#thin-loader--remote-bundle));
+local-shell changes reach it only through a new IPK via the manual HBC refresh. All three workstreams
+touch **payload files only** (`js/app/catalog.js`, `js/app/audio.js`, `css/app.css`) — **no new files,
+no IPK rebuild**.
 
 **Deferred / pending device logs:** narrowing `DirectPlayProfiles` (A5 — make the server-side profile
 match the TV's real codecs) and the reported **video black-screen** defect are **not** part of this
@@ -717,7 +777,9 @@ While a list session plays, the **Prev**/**Next** buttons and the audio card's m
 (**Repeat** / **Shuffle** / **Queue**) are part of the same visible tabbable set, so Up/Down reaches
 them like any other control. All of them are hidden (`display: none`) for a single-item play,
 which keeps the D-pad walk unchanged there; at a list boundary the button stays visible and focusable
-but dimmed (`is-inert`) — it is never `disabled`, because `.focus()` on a disabled button fails.
+but dimmed (`is-inert`) — it is never `disabled`, because `.focus()` on a disabled button fails. The
+music search field (`#musicSearchInput`) is a real `<input>`, so it is in the visible tabbable set
+too (`input` is in the selector); Enter inside it submits the search.
 
 OK (13) and Space (32) toggle the auto-connect checkbox in the picker (`handleCheckbox`); while
 `#playerView` (`player.js`) or `#audioView` (`audio.js`) is active, the same keys toggle play/pause.
@@ -734,7 +796,8 @@ focused (`isButtonFocused`), so the two paths cannot both fire.
 | `connected_servers` | LRU map (max 4) of `{baseurl, Address, auto_connect, id, Name}` keyed by server id. |
 | `michelly_sessions` | Per-server auth session `{userId, accessToken, userName}` keyed by server id. |
 | `michelly_default_user` | Default credential for automatic sign-in: **absent** = built-in `pepe`/`pepe`; `{username, password}` = custom (**plaintext**); `{disabled: true}` = auto-login off. |
-| `michelly_playlists` | Per-server saved-playlist slots `{slots:[[…],[…],[…]]}` keyed by server id (like `michelly_sessions`): exactly three preset slots, Audio-only entries `{Id, Type, Name, ImageTags?}` (see [Saved playlists](#saved-playlists-michellyplaylists)). |
+| `michelly_playlists` | **Legacy, read-only** per-server 3-slot store `{slots:[[…],[…],[…]]}` keyed by server id (like `michelly_sessions`): exactly three preset slots, Audio-only entries `{Id, Type, Name, ImageTags?}`. Never written or deleted since Tier 3; migrated losslessly/lazily into `michelly_playlists_v2` (see [Saved playlists](#saved-playlists-michellyplaylists)). |
+| `michelly_playlists_v2` | Per-server **dynamic named playlists** `{playlists:[{id, name, items:[entry…]}]}` keyed by server id (like `michelly_sessions`); Audio-only entries `{Id, Type, Name, ImageTags?, Disabled?}` (see [Saved playlists](#saved-playlists-michellyplaylists)). |
 
 The LRU map is written only on a successful connect (`handleSuccessServerInfo`). A failed connect
 leaves it untouched — `handleFailure` no longer clears it (`1.3.2`, divergence log

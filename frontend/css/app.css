@@ -512,30 +512,38 @@
     overflow: hidden;
 }
 
+/* Two-column player card: dominant album art on the left, info + controls on the right.
+ * flex-wrap lets the detail column drop below the art on a narrow width (Chromium 38:
+ * flexbox only, no grid, no gap, no custom properties). */
 .audio-now {
     display: -webkit-flex;
     display: flex;
-    -webkit-flex-direction: column;
-    flex-direction: column;
-    -webkit-align-items: center;
-    align-items: center;
+    -webkit-flex-direction: row;
+    flex-direction: row;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: flex-start;
+    align-items: flex-start;
     -webkit-justify-content: center;
     justify-content: center;
-    width: 60%;
-    max-width: 34rem;
+    width: 82%;
+    max-width: 56rem;
     padding: 2rem;
     background: #241B3D;
     border: 2px solid #3A2E5C;
     border-radius: 0.9rem;
     box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.45);
-    text-align: center;
+    text-align: left;
 }
 
 .audio-poster {
     position: relative;
-    width: 60%;
-    max-width: 18rem;
-    min-height: 10rem;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    width: 24rem;
+    max-width: 100%;
+    min-height: 12rem;
+    margin: 0 1.5rem 1rem 0;
     background: #2E2350;
     border: 2px solid #3A2E5C;
     border-radius: 0.6rem;
@@ -560,34 +568,68 @@
     color: #A99FC4;
 }
 
+/* Info column beside the art. flex:1 lets it grow into the remaining width; flex-basis
+ * + min-width make it wrap under the art on a narrow card. */
+.audio-detail {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-align-items: stretch;
+    align-items: stretch;
+    -webkit-flex: 1 1 20rem;
+    flex: 1 1 20rem;
+    min-width: 14rem;
+    text-align: left;
+}
+
 .audio-title {
-    margin-top: 1.2rem;
-    font-size: 1.3em;
+    margin-top: 0;
+    font-size: 1.5em;
     color: #F3EFFA;
 }
 
 .audio-artist {
     margin-top: 0.3rem;
-    font-size: 0.85em;
+    font-size: 0.95em;
     color: #C9A6FF;
 }
 
 .audio-album {
     margin-top: 0.2rem;
-    font-size: 0.7em;
+    font-size: 0.8em;
     color: #A99FC4;
 }
 
+/* Read-only seek indicator, mirroring the video player's .player-progress. The fill width
+ * is driven from audio.js updateProgress() (percent = currentTime/duration, clamped). */
+.audio-progress {
+    width: 100%;
+    height: 0.5rem;
+    margin-top: 1.2rem;
+    background: #3A2E5C;
+    border-radius: 0.25rem;
+    overflow: hidden;
+}
+
+.audio-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: #C9A6FF;
+}
+
 .audio-time {
-    margin-top: 1rem;
+    margin-top: 0.6rem;
     font-size: 0.8em;
     color: #D9D0EC;
 }
 
+/* Primary transport action: larger than the skip buttons. */
 .audio-toggle {
     width: auto;
-    min-width: 9rem;
-    margin-top: 1rem;
+    min-width: 11rem;
+    margin: 0 1rem;
+    font-size: 1.1em;
     background: #C9A6FF;
     border-color: #C9A6FF;
     color: #1A0F33;
@@ -606,7 +648,7 @@
 .audio-skip {
     width: auto;
     min-width: 6rem;
-    margin-top: 1rem;
+    margin: 0 1rem;
     background: #241B3D;
     border-color: #C9A6FF;
     color: #C9A6FF;
@@ -624,18 +666,46 @@
     opacity: 0.45;
 }
 
-/* Playback-mode buttons (Repeat / Shuffle / Queue; built in audio.js). The element also
- * carries .audio-skip, so look and focus styling come from there; this block only adds
- * the wider min size and horizontal breathing room. The card stack is a COLUMN: these
- * buttons sit one per line, stacked vertically under Prev / Play / Next (no flex-wrap —
- * vertical stacking is fine and keeps the D-pad walk linear). Same visible-tabbable /
- * dim-with-.is-inert discipline as Prev/Next: no disabled attribute, focusable no-ops
- * at boundaries. */
+/* Primary transport row: Prev / Play / Next side by side in DOM order, mirroring the
+ * video player's .player-controls-row. */
+.audio-transport {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: row;
+    flex-direction: row;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    width: 100%;
+    margin-top: 1.2rem;
+}
+
+/* Secondary playback-mode row (Repeat / Shuffle / Queue; built in audio.js). The element
+ * also carries .audio-skip, so look and focus styling come from there; this block only
+ * adds the wider min size and breathing room. DOM order Prev -> Play -> Next -> modes
+ * keeps the Up/Down walk linear. Same visible-tabbable / dim-with-.is-inert discipline
+ * as Prev/Next: no disabled attribute, focusable no-ops at boundaries. */
+
+.audio-modes {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: row;
+    flex-direction: row;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    width: 100%;
+    margin-top: 0.6rem;
+}
 
 .audio-mode {
     width: auto;
     min-width: 8rem;
-    margin: 1rem 0.5rem 0 0.5rem;
+    margin: 0.4rem 0.5rem;
 }
 
 /* Inline session-queue overlay (built in audio.js, hidden until the Queue toggle opens
@@ -1057,6 +1127,107 @@
     max-width: 48rem;
 }
 
+/* Dynamic named playlists (Tier 3): the inline create/rename editor and the per-playlist /
+ * per-track controls (Play / Rename / Delete, Move up / Move down / Disable-Enable / Remove).
+ * Reuses the .playlist-* visual language above; flexbox only, fixed palette literals, no CSS
+ * grid, no gap, no custom properties. Buttons stay focusable and are never disabled. */
+
+.playlist-editor {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: center;
+    align-items: center;
+    width: 100%;
+    max-width: 48rem;
+    margin-bottom: 1.2rem;
+    padding: 0.6rem 0.8rem;
+    background: #241B3D;
+    border: 2px solid #3A2E5C;
+    border-radius: 0.6rem;
+}
+
+/* The editor input overrides the shell's width:100% form-control default so it flexes beside
+ * Save/Cancel. Visibly focusable: the D-pad lands on it, so it shows the palette's focus ring. */
+input.playlist-name-input {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 12rem;
+    margin: 0.2rem 0;
+    font-size: 0.75em;
+}
+
+input.playlist-name-input:focus {
+    outline: 4px solid #C9A6FF;
+    outline-offset: 2px;
+}
+
+.playlist-editor button {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    min-width: 7rem;
+    margin: 0.2rem 0 0.2rem 0.6rem;
+}
+
+/* Row-level controls reuse the transparent-outline language of .playlist-clear-btn; the
+ * primary Play keeps its filled .playlist-play-btn treatment. */
+
+.playlist-rename-btn,
+.playlist-delete-btn,
+.playlist-move-btn,
+.playlist-toggle-btn,
+.playlist-new-btn,
+.playlist-save-btn,
+.playlist-cancel-btn {
+    background: transparent;
+    border-color: #C9A6FF;
+    color: #C9A6FF;
+}
+
+.playlist-rename-btn:focus,
+.playlist-delete-btn:focus,
+.playlist-move-btn:focus,
+.playlist-toggle-btn:focus,
+.playlist-new-btn:focus,
+.playlist-save-btn:focus,
+.playlist-cancel-btn:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+}
+
+/* 'New playlist' sits below the rows at list level and in the add-to-playlist picker, so it
+ * drops the row's left margin and never stretches to the column width. */
+.playlist-new-btn {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    -webkit-align-self: flex-start;
+    align-self: flex-start;
+    min-width: 9rem;
+    margin-top: 0.4rem;
+}
+
+.playlist-slots .playlist-new-btn {
+    margin-left: 0;
+}
+
+/* A soft-disabled track row dims (name + controls) but stays fully focusable: no disabled
+ * attribute anywhere, so the D-pad can still reach every button. */
+.playlist-track-row.is-disabled {
+    opacity: 0.55;
+}
+
+/* The dimmed boundary controls (first/last Move, the Enable toggle of a disabled track) mirror
+ * the Prev/Next is-inert treatment: dimmed but still real, focusable, never-disabled buttons. */
+.playlist-move-btn.is-inert,
+.playlist-toggle-btn.is-inert {
+    opacity: 0.45;
+}
+
 /* Music browse (artist-centric UI, built in catalog.js). Flexbox only (Chromium 38) - no CSS grid, no gap, no custom properties. */
 
 /* The shell keeps .view's display:none / .view.active's display:flex untouched; only the
@@ -1166,25 +1337,6 @@
     margin: 0;
     font-size: 1.2em;
     color: #F3EFFA;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* Static, non-interactive search surface (a div, never a button): no :focus rule and a default
- * cursor, so it can never look focusable. */
-.music-search {
-    -webkit-flex: 1 1 auto;
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: 28rem;
-    margin-left: 0.8rem;
-    padding: 0.4rem 1rem;
-    background: #241B3D;
-    border: 2px solid #3A2E5C;
-    border-radius: 1.2rem;
-    color: #A99FC4;
-    cursor: default;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1410,4 +1562,142 @@
 
 .music-status:empty {
     display: none;
+}
+
+/* Music search, browse dimensions and shelves (Workstream A). Flexbox only (Chromium 38):
+ * no CSS grid, no gap, no custom properties. Palette: #C9A6FF / #241B3D / #1A0F33 / #3A2E5C /
+ * #F3EFFA / #A99FC4 / #2E2350. */
+
+/* Real search field + Search button in the topbar. input.music-search-input beats the shell's
+ * input[type=text] width:100% (equal specificity, later stylesheet) so the field flexes. */
+input.music-search-input {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: 28rem;
+    margin: 0 0 0 0.8rem;
+    padding: 0.4rem 1rem;
+    border-radius: 1.2rem;
+}
+
+input.music-search-input::-webkit-input-placeholder {
+    color: #A99FC4;
+    opacity: 1;
+}
+
+input.music-search-input:focus {
+    border-color: #C9A6FF;
+    background-color: #2E2350;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 2px;
+    box-shadow: none;
+}
+
+.music-search-btn {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    min-width: 6rem;
+    margin: 0 0 0 0.6rem;
+    background: #C9A6FF;
+    border-color: #C9A6FF;
+    color: #1A0F33;
+}
+
+.music-search-btn:focus {
+    background: #DCC5FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+/* Results / genre-drilldown header: a title plus one action button, with the section rule. */
+.music-results-head {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid #3A2E5C;
+}
+
+.music-results-title {
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.05em;
+    font-weight: bold;
+    color: #C9A6FF;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.music-clear-btn,
+.music-genre-back-btn {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    min-width: 8rem;
+    margin: 0.2rem 0 0.2rem 0.6rem;
+    background: transparent;
+    border-color: #C9A6FF;
+    color: #C9A6FF;
+}
+
+.music-clear-btn:focus,
+.music-genre-back-btn:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+/* Genre grid: a wrapped chip-style grid of real buttons (one per derived genre name). */
+.music-genre-grid {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: wrap;
+    flex-wrap: wrap;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-align-content: flex-start;
+    align-content: flex-start;
+    width: 100%;
+}
+
+.music-genre-btn {
+    width: auto;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    margin: 0.3rem 0.5rem 0.3rem 0;
+    padding: 0.45rem 1.1rem;
+    background: #241B3D;
+    border: 2px solid #C9A6FF;
+    border-radius: 1.2rem;
+    color: #C9A6FF;
+    font-weight: bold;
+}
+
+.music-genre-btn:focus {
+    background: #C9A6FF;
+    border-color: #EDE3FF;
+    color: #1A0F33;
+    outline: 4px solid #C9A6FF;
+    outline-offset: 3px;
+}
+
+/* Shelf region: one block wrapper so the 0..3 bands insert/replace as a single unit before
+ * the artist grid (a late response never triggers a full re-render). */
+.music-shelves {
+    display: block;
+    width: 100%;
 }

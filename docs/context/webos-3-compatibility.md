@@ -2,8 +2,8 @@
 last_updated: 2026-09-23
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
-tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist]
-version: 2.6
+tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist, search, browse-dimensions, audio-progress]
+version: 2.7
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -48,6 +48,9 @@ The concrete target is **Chromium 38**.
 | `String.prototype.includes` | Polyfilled at the top of `frontend/js/index.js` (String polyfill lines 21–31; the `Array.prototype.includes` polyfill is at lines 9–15). Covers the `String.prototype.includes` use inside `webOSTV.js`. |
 | `Array.prototype.includes` | **Polyfilled at the top of `frontend/js/index.js`** (ES5, installed before the `webOS.deviceInfo(...)` call). Covers the `webOSTV.js` `getSystemInfo` `missingConfigs` path. |
 | CSS | `frontend/css/app.css` and `frontend/css/main.css` are **flexbox-only** with `-webkit-` prefixes. **No CSS grid** (Chrome 57+) is used anywhere. |
+| Inline music search (`<input>`) | A real `<input type="text">` + Search `<button>` in the music topbar (`catalog.js:3126-3155`), built with `document.createElement` and DOM0 `onkeydown`/`onclick`. Native form control on Chromium 38; the `placeholder` attribute is supported (Chrome 4+). No new engine feature. |
+| Audio progress bar (`.audio-progress`) | Plain `<div>`s whose `#audioProgressFill` width is set as a `%` string (`audio.js:243`, `610-614`), driven by the same `timeupdate`/`loadedmetadata` listeners as `#audioTime`. No `<progress>` element and no new engine feature; **display-only** (Left/Right are D-pad no-ops, so there is no scrub). |
+| Playlist editor controls | `#playlistsView` create/rename text editor, Move up/down, Disable/Enable and Delete controls (`catalog.js:1850-2068`) are `document.createElement`'d `<button>`s / `<input>`s with DOM0 handlers; boundary buttons dim (`is-inert`) and are **never** `disabled`. No new engine feature. |
 
 > Caveat: the `const` behaviour on Chromium 38 is the one claim that could not be verified against a
 > real Chromium 38 binary. Treat it as "degraded block scoping, not a crash", not as a guaranteed
@@ -104,7 +107,13 @@ What must run on Chromium 38 is the app itself, and it does so with a small, fix
 - `<video>` with a direct `/Videos/{id}/stream` source, and `<audio>` with a direct
   `/Audio/{id}/stream` source;
 - the artist-centric music views (`#musicView`/`#artistView`) — runtime-built with
-  `document.createElement`, flexbox-only, every control a `<button>`; **no new engine feature**;
+  `document.createElement`, flexbox-only, every control a `<button>`; the browse-dimension chips,
+  shelves and the **real inline search `<input>`** are all native controls with **no new engine
+  feature**;
+- the two-column audio now-playing card with its **display-only** `.audio-progress` bar — plain
+  `<div>` width percentages, no `<progress>` element, no new engine feature;
+- the `#playlistsView` editor (create/rename input, reorder and soft-disable buttons) — runtime-built
+  DOM with DOM0 handlers, no new engine feature;
 - the thin loader: synchronous pure-JS SHA-256, `XMLHttpRequest` `arraybuffer` fetches and inline
   classic-script injection (no `crypto.subtle`, no `fetch`, no Service Worker);
 - flexbox layouts with `-webkit-` prefixes.
@@ -230,12 +239,13 @@ if (!Array.prototype.includes) {
 
 On-device test checklist for the target webOS 3.0 TV:
 
-> **Deployment prerequisite.** The video control overlay (`frontend/js/app/player.js`) and the audio
-> player (`frontend/js/app/audio.js`) are **payload** files. They reach the TV only after
-> `npm run bundle` + a publish (video overlay), and the audio work is **uncommitted** today — a TV on
-> the published `1.3.3` IPK has **no audio player at all** and shows the overlay only once the bundle
-> is regenerated and published. Verify the deployed bundle version (`window.MichellyShell`) before
-> judging any item below.
+> **Deployment prerequisite.** All of this work lives in **payload** files (`frontend/js/app/*.js`,
+> `css/app.css`); it reaches the TV only after `npm run bundle` + a publish. Tier 1 (modes, queue,
+> item-actions menu) is **committed on `master`** (HEAD `0e86bd7`); Tier 2 (browse dimensions,
+> shelves, functional search), Tier 3 (dynamic named playlists) and the audio visual identity
+> (two-column card + progress bar) are **uncommitted** in the working tree and were validated
+> **statically only** (`npm run check`, reviewer, tester gates) — **not run on a device/emulator**.
+> Verify the deployed bundle version (`window.MichellyShell`) before judging any item below.
 
 - [ ] App launches from the home screen / launcher.
 - [ ] Server picker renders; U2/D-pad moves focus between field, checkbox and Connect.
@@ -294,6 +304,23 @@ On-device test checklist for the target webOS 3.0 TV:
       `This item's audio codec (FLAC) is not supported by the TV, or the stream could not be loaded.`
       for audio, or the video equivalent on `MEDIA_ERR_SRC_NOT_SUPPORTED`) instead of failing silently
       or leaving a blank screen.
+- [ ] Music home: the search field is a **real, focusable `<input>`**; Up/Down reaches it and the
+      Search button; a term returns results that replace the content area, and **Clear search**
+      restores the artist grid; Enter inside the field submits (Tier 2, uncommitted).
+- [ ] Music home: the **Genres / Albums / Songs** chips fetch and render their dimension grids;
+      selecting a genre drills into its songs and Back returns to the Genres list; a failed fetch
+      offers **Retry** (Tier 2, uncommitted).
+- [ ] Music home: the **Recently added** and **Most played** shelves render when the server returns
+      items and each is hidden when empty (Tier 2, uncommitted).
+- [ ] Audio now-playing card is **two-column** (album art + info/controls column) and the
+      `.audio-progress` bar advances with `timeupdate`/`loadedmetadata`; it is **display-only**
+      (Left/Right do nothing) (audio visual identity, uncommitted).
+- [ ] `#playlistsView`: **New playlist** creates one, **Rename** edits the name, **Delete** arms an
+      inline Yes/No confirm; the detail offers **Move up/down** (reorder), **Disable/Enable** (Play
+      skips disabled tracks) and **Remove**; hardware Back returns to the playlist list on one press
+      (Tier 3, uncommitted).
+- [ ] A server with **no legacy 3-slot record** shows an **empty playlist list** with a New playlist
+      button instead of three empty `Playlist 1/2/3` slots (behaviour change — confirm it is intended).
 - [ ] `webOS.deviceInfo` resolves — the `Array.prototype.includes` `TypeError` is expected to be gone after `1.3.1` (check the console).
 - [ ] Thin loader: online / offline / bad-hash checks — see the dedicated checklist in
       [Thin loader on Chromium 38](#thin-loader-on-chromium-38).

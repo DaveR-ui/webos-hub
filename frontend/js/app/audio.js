@@ -234,6 +234,36 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
 
         out.textContent = formatTime(a.currentTime) + ' / ' + formatTime(a.duration);
+        updateProgress();
+    }
+
+    // Read-only progress bar width as a percentage; guarded against NaN/0/Infinity
+    // durations and clamped to 0..100 (mirrors updateProgress() in player.js). Left/Right
+    // are intentional D-pad no-ops, so the bar is a display-only indicator (no scrubbing).
+    function updateProgress() {
+        var a = audio();
+        var fill = document.querySelector('#audioProgressFill');
+
+        if (!a || !fill) {
+            return;
+        }
+
+        var duration = a.duration;
+        var percent = 0;
+
+        if (duration && isFinite(duration) && duration > 0) {
+            percent = (a.currentTime / duration) * 100;
+        }
+
+        if (!isFinite(percent) || percent < 0) {
+            percent = 0;
+        }
+
+        if (percent > 100) {
+            percent = 100;
+        }
+
+        fill.style.width = percent + '%';
     }
 
     // Keeps the button label in sync with the element's actual paused state.
@@ -559,21 +589,36 @@ var Michelly = window.Michelly = window.Michelly || {};
         var tag = item.ImageTags && item.ImageTags.Primary;
         ui().renderImage(img, tag ? api().imageUrl(item.Id, 'Primary', { maxWidth: 480, tag: tag }) : null, item.Name || '');
 
-        card.appendChild(ui().el('div', 'audio-title', item.Name || 'Untitled'));
+        // Info + controls column: sits beside the album art in the row card and wraps
+        // below it when the card is too narrow for two columns.
+        var detail = ui().el('div', 'audio-detail');
+
+        detail.appendChild(ui().el('div', 'audio-title', item.Name || 'Untitled'));
 
         var artist = (item.Artists && item.Artists.length) ? item.Artists.join(', ') : item.AlbumArtist;
 
         if (artist) {
-            card.appendChild(ui().el('div', 'audio-artist', artist));
+            detail.appendChild(ui().el('div', 'audio-artist', artist));
         }
 
         if (item.Album) {
-            card.appendChild(ui().el('div', 'audio-album', item.Album));
+            detail.appendChild(ui().el('div', 'audio-album', item.Album));
         }
+
+        // Read-only seek/progress indicator, mirroring the video player's .player-progress.
+        // Driven by the same timeupdate/loadedmetadata events that refresh #audioTime.
+        var progress = ui().el('div', 'audio-progress');
+        var progressFill = ui().el('div', 'audio-progress-fill');
+        progressFill.id = 'audioProgressFill';
+        progress.appendChild(progressFill);
+        detail.appendChild(progress);
 
         var time = ui().el('div', 'audio-time', '0:00 / 0:00');
         time.id = 'audioTime';
-        card.appendChild(time);
+        detail.appendChild(time);
+
+        // Primary transport row: Prev / Play / Next side by side, Play visually dominant.
+        var transport = ui().el('div', 'audio-transport');
 
         var prev = ui().el('button', 'audio-skip', 'Prev');
         prev.id = 'audioPrev';
@@ -597,7 +642,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         prev.onclick = function () {
             namespace.playlist.previous();
         };
-        card.appendChild(prev);
+        transport.appendChild(prev);
 
         var button = ui().el('button', 'audio-toggle', 'Play');
         button.id = 'audioToggle';
@@ -622,7 +667,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         button.onclick = function () {
             toggle();
         };
-        card.appendChild(button);
+        transport.appendChild(button);
 
         var next = ui().el('button', 'audio-skip', 'Next');
         next.id = 'audioNext';
@@ -644,7 +689,12 @@ var Michelly = window.Michelly = window.Michelly || {};
         next.onclick = function () {
             namespace.playlist.next();
         };
-        card.appendChild(next);
+        transport.appendChild(next);
+        detail.appendChild(transport);
+
+        // Secondary playback-mode row: Repeat / Shuffle / Queue. Visually secondary but
+        // still focusable and never disabled (dimmed via .is-inert at boundaries only).
+        var modes = ui().el('div', 'audio-modes');
 
         var repeatBtn = ui().el('button', 'audio-skip audio-mode', 'Repeat: Off');
         repeatBtn.id = 'audioRepeat';
@@ -667,7 +717,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             cycleRepeat();
             return false;
         };
-        card.appendChild(repeatBtn);
+        modes.appendChild(repeatBtn);
 
         var shuffleBtn = ui().el('button', 'audio-skip audio-mode', 'Shuffle: Off');
         shuffleBtn.id = 'audioShuffle';
@@ -688,7 +738,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             toggleShuffle();
             return false;
         };
-        card.appendChild(shuffleBtn);
+        modes.appendChild(shuffleBtn);
 
         var queueBtn = ui().el('button', 'audio-skip audio-mode', 'Queue: 0');
         queueBtn.id = 'audioQueueBtn';
@@ -709,7 +759,10 @@ var Michelly = window.Michelly = window.Michelly || {};
             toggleQueueOverlay();
             return false;
         };
-        card.appendChild(queueBtn);
+        modes.appendChild(queueBtn);
+        detail.appendChild(modes);
+
+        card.appendChild(detail);
 
         // Queue overlay container: built once per card, hidden by default. Overlay state
         // does not survive a card rebuild — play() always rebuilds with it closed, which

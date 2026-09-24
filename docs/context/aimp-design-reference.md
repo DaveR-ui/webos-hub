@@ -1,24 +1,27 @@
 ---
 last_updated: 2026-09-23
 status: active
-description: Design-reference mining AIMP6 (native Linux player) for transferable IA and state models — library, playlist/queue and shell patterns — mapped against MiChelly's surfaces with feasibility verdicts. Tier 1 (modes, queue, item-actions menu) landed; Tiers 2–3 await human approval.
+description: Design-reference mining AIMP6 (native Linux player) for transferable IA and state models — library, playlist/queue and shell patterns — mapped against MiChelly's surfaces with feasibility verdicts. Tier 1 (modes, queue, item-actions menu) implemented and committed; Tiers 2–3 (browse dimensions/search, dynamic playlists) implemented but uncommitted, pending on-device verification.
 tags: [design-reference, aimp, idea-mining, library, playlist, queue, ux, d-pad, feasibility]
-version: 1.0
+version: 1.1
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
 # AIMP Design Reference
 
-> **Status: reference / analysis; Tier 1 landed.** The Tier 1 subset below (playback modes, queue,
-> generalized item-actions menu) is implemented — uncommitted working tree as of this update.
-> Tiers 2–3 remain analysis, awaiting human review/approval. This page captures two completed
+> **Status: reference / analysis; Tiers 1–3 implemented.** Tier 1 (playback modes, queue,
+> generalized item-actions menu) is implemented and **committed on `master`** (HEAD `0e86bd7`).
+> Tiers 2–3 (library dimension browse + functional search; dynamic named playlists) are implemented
+> but **uncommitted** in the working tree. The whole set was validated **statically only** —
+> `npm run check` green, reviewer approval and tester gates — and is **pending on-device
+> verification**: do not read "implemented" as "proven on the TV". This page captures two completed
 > exploration passes over AIMP6 and records which ideas are transferable to MiChelly and which are
-> not. Treat every remaining "feasible" verdict as a candidate for discussion, not a spec or a work
+> not. Treat any remaining "feasible" verdict as a candidate for discussion, not a spec or a work
 > order.
 
 ## Problem
 
-MiChelly's music surface is deliberately thin (artist-centric browse, three fixed playlist slots, a
+MiChelly's music surface is deliberately thin (artist-centric browse, dynamic named playlists, a
 strictly in-order audio session). AIMP6 is a mature desktop player with a deep, well-factored
 information architecture. Mining it for **ideas** — field models, browse structure, queue/playlist
 state, playback-mode enums — can sharpen MiChelly without inventing patterns from scratch. The risk
@@ -109,20 +112,22 @@ constraints before it is considered:
 
 Anchors are `file:line`. `catalog.js` / `api.js` / `audio.js` live under `frontend/js/app/`;
 `index.js` under `frontend/js/`; `app.css` under `frontend/css/`. Line numbers reflect the code at
-inspection time — re-verify before any implementation. Rows marked **Tier 1 — shipped** keep their
-pre-implementation surface columns; the shipped behaviour is canonical in
-[architecture](architecture.md#ordered-list-playback-michellyplaylist).
+inspection time — re-verify before any implementation. Rows marked **Tier 1 — shipped**, **Tier 2 —
+implemented (uncommitted)** or **Tier 3 — implemented (uncommitted)** keep their pre-implementation
+surface columns where useful; the shipped behaviour is canonical in
+[architecture](architecture.md#ordered-list-playback-michellyplaylist) and
+[architecture → Saved playlists](architecture.md#saved-playlists-michellyplaylists).
 
 | AIMP # | Idea | MiChelly surface (verified anchor) | Verdict |
 | --- | --- | --- | --- |
-| (1)(2) | Field dictionary + browse richness | `#musicView`: `MUSIC_CHIPS` All / A-F / G-M / N-T / U-Z / Folders (`catalog.js:1656`, render `1878-1909`, client-side letter filter `2021-2053`). No Genre handling exists anywhere in shipped JS; no all-songs list. Jellyfin `/Items` already accepts `IncludeItemTypes` / `SortBy` / `ArtistIds` / `SearchTerm` / `Filters` (`api.js:187-209`). | **Feasible** — add dimension chips (Genres / Albums / Artists / Songs), reuse the `.music-grid` card pattern; D-pad-safe as vertical / wrapped buttons. |
-| (4) | Playback accounting / stats | "Jump back in" shelf already uses `/Items/Resume` (max 8) (`catalog.js:2115-2187`, `api.js:222`). | **Feasible** — sibling shelves "Recently added" (`SortBy=DateCreated`) / "Most played" (Jellyfin played fields via `Fields`). |
+| (1)(2) | Field dictionary + browse richness | `#musicView`: `MUSIC_CHIPS` All / A-F / G-M / N-T / U-Z / **Genres / Albums / Songs** / Folders (`catalog.js:2967`, chips render ~`3278`, dimensions fetched lazily ~`3544-3640`). Genres are derived **client-side** from the union of audio items' `Genres` — no server-side genre param (`api.getItems` has none). Jellyfin `/Items` accepts `IncludeItemTypes` / `SortBy` / `ArtistIds` / `SearchTerm` / `Filters`. | **Tier 2 — implemented (uncommitted)** — dimension chips reuse the `.music-grid` card pattern, D-pad-safe as wrapped buttons; pending on-device verification. |
+| (4) | Playback accounting / stats | Shelves on `#musicView`: **Jump back in** uses `/Items/Resume` (max 8), **Recently added** `SortBy=DateCreated`, **Most played** `SortBy=PlayCount` + `Filters=IsPlayed` (all max 8; each hidden when empty, a failure hides only its band) (`catalog.js:4064-4176`). | **Tier 2 — implemented (uncommitted)** — pending on-device verification. |
 | (5) | Art / lyrics source-chain + cache | Art comes only from `/Items/{id}/Images` (`api.js:264`); the provider-chain + cache is largely server-side (Jellyfin already does it). | **N/A** — mostly not needed in-app; log as server-side. |
-| (6)(7) | Smart playlists / advanced search | Search topbar is a static, visual-only `music-search` div (`catalog.js:1798-1800`); functional search is documented increment-2 ([architecture](architecture.md) §330-332). | **Partially** — real search is planned; the rule-builder for smart playlists is a big lift, **not near-term**. |
-| (9) | Multi-playlist manager | `michelly_playlists`: 3 hardcoded fixed-name slots `SLOT_COUNT` / `SLOT_NAMES` (`catalog.js:282-284`); `normalizeSlots` rejects `slots.length !== 3` (`catalog.js:347-373`); no rename/create/reorder (reorder explicitly deferred, [architecture](architecture.md) §522); audio-only, per-server `localStorage` keyed by Jellyfin `System/Info` Id (`catalog.js:286-296`, `index.js:453-454`). | **Feasible** (data-shape change + migration of existing 3-slot records): dynamic named playlists with create / rename / delete + reorder. Groups / lock / personal-settings = **not near-term**. |
+| (6)(7) | Smart playlists / advanced search | The search topbar is now a **real** inline `<input>` + Search button (`catalog.js:3126-3155`); a term goes to `/Items` as `SearchTerm` and the results replace the content area until cleared (`catalog.js:3911-4033`). | **Tier 2 — search implemented (uncommitted)** — pending on-device verification. The rule-builder for smart playlists is a big lift, **not near-term**. |
+| (9) | Multi-playlist manager | `michelly_playlists_v2` maps server id → `{playlists:[{id, name, items}]}` (`catalog.js:779-786`); create / rename / delete / reorder / soft-disable (`catalog.js:1191-1285`) in the `#playlistsView` manage view. The legacy `michelly_playlists` 3-slot store is **read-only** and lazily migrated losslessly (`pl-legacy-N`, `catalog.js:1009-1055`); audio-only, per-server keyed by Jellyfin `System/Info` Id. | **Tier 3 — implemented (uncommitted)** — dynamic named playlists with a lossless lazy migration and **reorder (no longer deferred)**; pending on-device verification. Groups / lock / personal-settings = **not near-term**. |
 | (10) | Queue as overlay | `Michelly.playlist` session is strictly in-order — no wrap / repeat / shuffle / queue (`catalog.js:116-124`, `227-242`); `audio.js` has no queue view. | **Tier 1 — shipped** — in-memory session + pending queue with queue-first advance, plus the audio-card queue overlay. |
 | (13) | Playback-mode enums | `#audioView` now-playing card (`audio.js:297-412`) has only Prev / Toggle / Next + text time; no shuffle / repeat / seek. | **Tier 1 — shipped** — repeat off/all/one and shuffle on/off buttons on the now-playing card, on the existing focus / dim (`.is-inert`) discipline. A-B repeat, crossfade = TV-marginal, **skipped**. |
-| (12) | Playlist verbs | Dedupe-on-add already exists (`addToSlot` duplicate guard, `catalog.js:454-471`). | **Adaptive / later** — per-item enable/disable switches, remove-missing. |
+| (12) | Playlist verbs | Dedupe-on-add exists (`addItemToPlaylist` `Id` guard, `catalog.js:1144-1167`). | **Tier 3 (partial) — implemented (uncommitted)** — per-item enable/disable switches (`setItemDisabled`, skipped by Play) and Move up/down reorder shipped; remove-missing = **later**. Pending on-device verification. |
 | (11) | Per-track bookmarks | — | **Not cloned** — low value for TV audio. |
 | (18) | Action sheet | `openPlaylistPicker` two-step inline picker already implements this shape (`catalog.js:525-564`, `749-773`). | **Tier 1 — shipped** — generalized into the per-item two-step actions menu (Play next / Add to queue / Add to playlist / Open album / Cancel) with one back handler. |
 | (17) | Macro / template engine | — | **Static idea only** — not worth a template language; adopt consistent "second line" row formatting (artist · album · year). |
@@ -131,15 +136,29 @@ pre-implementation surface columns; the shipped behaviour is canonical in
 
 ## Recommended tiers
 
-**Tier 1 landed** (working tree, uncommitted as of this doc bump); Tiers 2–3 remain
-**analysis, awaiting human review/approval.**
+**Tiers 1–3 implemented.** Tier 1 is **committed on `master`** (HEAD `0e86bd7`); Tiers 2–3 are
+**implemented but uncommitted** in the working tree. The whole set was validated **statically only**
+(`npm run check`, reviewer approval, tester gates) and is **pending on-device verification** — do not
+read it as proven on the TV.
 
-- **Tier 1 (small, high value) — shipped** — repeat / shuffle enums in now-playing; a "Play next"
-  queue; generalize the item-action picker.
-- **Tier 2** — library dimension browse (Genres / Albums / Songs + Recently-added / Most-played
-  shelves); functional search (already planned, increment-2).
-- **Tier 3** — dynamic renameable playlists with a data migration + reorder UI; per-item soft-disable
-  switches.
+- **Tier 1 (small, high value) — implemented & committed** — repeat / shuffle enums in now-playing; a
+  "Play next" queue; generalize the item-action picker.
+- **Tier 2 — implemented (uncommitted)** — library dimension browse (Genres / Albums / Songs +
+  Recently-added / Most-played shelves); functional search in the topbar. **Deltas from the original
+  plan:** search is now a **real** inline `<input>` + Search button (was "planned, increment-2"); the
+  **Genres** dimension is derived **client-side** from the union of audio items' `Genres` arrays
+  (Jellyfin `/Items` has no genre query param, and `api.js` was off-limits). **Known follow-up:** the
+  dimension fetch window is bounded (~500 items) with **no `Show more` pager yet**.
+- **Tier 3 — implemented (uncommitted)** — dynamic renameable playlists with a **lossless, lazy,
+  additive** migration of the legacy 3-slot records (the legacy key is left read-only) and a reorder
+  UI; per-item soft-disable switches. **Delta:** reorder is **no longer deferred** — the playlist
+  detail now ships Move up / Move down. **Known follow-up (pending human confirmation):** a server
+  with no legacy record now shows an empty playlist list with a **New playlist** button instead of
+  three empty `Playlist 1/2/3` slots.
+- **Also landed — not an AIMP tier** — the audio now-playing card is now **two-column** (dominant
+  album art + an info/controls column) with a **display-only** `.audio-progress` bar mirroring the
+  video player's `.player-progress`. Interactive scrubbing stays out of scope because Left/Right are
+  intentional D-pad no-ops.
 - **Explicitly not cloned** — skins / engine, bookmarks, A-B repeat, drag-drop gestures,
   multi-window docking, tag editing.
 
@@ -180,9 +199,11 @@ state as visible-tabbable, Up/Down-navigable controls or the idea will not survi
 
 ### Treating a tier as a work order
 
-Every "Feasible" above is contingent on human approval and on the payload-only / new-file rules. The
-dynamic-playlist item in particular is a **data-shape change requiring migration** of existing
-3-slot records — not a UI-only tweak.
+Every "Feasible" above was contingent on human approval and on the payload-only / new-file rules, and
+all three tiers are now implemented. The dynamic-playlist item in particular was a **data-shape change
+requiring migration** of existing 3-slot records — not a UI-only tweak; the migration is additive and
+lossless (the legacy key is never written or deleted). Remember that implemented ≠ verified: the
+Tier 2–3 work is **uncommitted and pending on-device verification**.
 
 ### Copying AIMP code or assets
 
@@ -191,12 +212,14 @@ original ES5/CSS.
 
 ### Assuming a field dictionary exists
 
-MiChelly has no Genre handling anywhere in shipped JS and no all-songs list. Browse-dimension ideas
-that assume those fields are net-new client work, even where Jellyfin `/Items` can supply them.
+MiChelly has no server-side genre query field. The **Genres** dimension is derived **client-side** by
+unioning the `Genres` arrays of the fetched audio items; the **Albums** / **Songs** dimensions reuse
+`MusicAlbum` / `Audio` `IncludeItemTypes`. Browse-dimension ideas that assume a richer server query
+are net-new client work, even where Jellyfin `/Items` can supply the fields.
 
 ## References
 
-- [Architecture](architecture.md) — the current music browse, playlist slots, audio session and thin-loader constraints.
+- [Architecture](architecture.md) — the current music browse, dynamic playlists, audio session and thin-loader constraints.
 - [WebOS 3 compatibility](webos-3-compatibility.md) — the ES5 / Chromium 38 / flexbox-only floor.
 - [HBC distribution plan](hbc-distribution-plan.md#remote-app-bundle-app) — why payload-only beats shell edits.
 - [Project entry point](../project.md) — slices, commands and conventions.
