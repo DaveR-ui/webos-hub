@@ -1,9 +1,9 @@
 ---
 last_updated: 2026-09-23
 status: active
-description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse with browse dimensions and functional search), native playback (ordered-list sessions with playback modes and an in-memory queue, and dynamic named user playlists with lazy legacy migration), the two-column audio now-playing card, and the bundled Luna discovery service.
+description: Architecture of the MiChelly webOS media client — the app shell and views, the ES5 thin loader and remote bundle, the ES5 REST client and authorization, per-server auth/session, catalog browsing (including the artist-centric music browse with browse dimensions and functional search), native playback (ordered-list sessions with playback modes and an in-memory queue, and dynamic named user playlists with lazy legacy migration), the full-view audio now-playing layout (bottom playback bar + right-docked queue panel), and the bundled Luna discovery service.
 tags: [architecture, webview, views, thin-loader, remote-bundle, sha256, media-server-rest-api, es5, auth, session, playback, playlist, playlists, music, artist, browse-dimensions, search, luna, discovery, d-pad, media-server]
-version: 2.8
+version: 2.9
 related: [webos-3-compatibility, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -40,9 +40,9 @@ loader — the verified remote payload when reachable, the packaged copies other
 | `frontend/js/app/api.js` | ES5 XHR media-server REST client: builds the `MediaBrowser` authorization header, exposes the endpoints, the image/stream URLs and the unauthorized hook. **Fork-only.** Remote payload. |
 | `frontend/js/app/auth.js` | Per-server session store keyed by server id in `michelly_sessions`; the tri-state default user (`michelly_default_user`) for automatic sign-in; login via `/Users/AuthenticateByName`; a 401 clears the session. **Fork-only.** Remote payload. |
 | `frontend/js/app/ui.js` | View switcher, back-handler stack and the loading/empty/error state renderers. **Fork-only.** Remote payload. |
-| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the artist-centric music browse (`Michelly.music`: browse dimensions, functional search, shelves), the dynamic named-playlist store (`michelly_playlists_v2`, with the legacy `michelly_playlists` key read-only) and its manage view (`Michelly.playlists`). **Fork-only.** Remote payload. |
+| `frontend/js/app/catalog.js` | Views → items → item detail → episodes, Resume and paging; every card is a `<button>`; owns the ordered list session (`Michelly.playlist`), the artist-centric music browse (`Michelly.music`: browse dimensions, functional search, shelves), the dynamic named-playlist store (`michelly_playlists_v2`, with the legacy `michelly_playlists` key read-only) and its manage view (`Michelly.playlists`); an **Audio** card in a listing plays immediately on one activation (`startListingAudioSession()`), with a listing-scoped status line mirroring playback failures. **Fork-only.** Remote payload. |
 | `frontend/js/app/player.js` | PlaybackInfo → direct-stream `<video>` plus an always-visible D-pad-operable control overlay (Prev / Play/Pause / Next buttons, time readout, progress bar), play/pause, list-aware auto-advance, codec-aware error reporting, best-effort session reporting. **Fork-only.** Remote payload. |
-| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: two-column now-playing card (dominant album art + an info/controls column with Prev / Play/Pause / Next, a read-only `.audio-progress` bar and the session-scoped Repeat / Shuffle / Queue controls with the inline queue overlay), play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
+| `frontend/js/app/audio.js` | Audio direct-stream `<audio>` player: full-view now-playing layout — a `.audio-body` row (`.audio-stage` album-art `.audio-poster` + `.audio-detail` title/artist/album on the left, the session queue panel `#audioQueue` docked on the right) above a bottom-docked `.audio-bar` holding the read-only `.audio-progress` bar, `#audioTime`, the Prev / Play/Pause / Next transport and the session-scoped Repeat / Shuffle / Queue controls — play/pause/stop, list-aware auto-advance, session reporting. **Fork-only.** Remote payload. |
 | `frontend/js/index.js` | Server picker, auto-discovery subscription, connect flow (auto-connect from the stored `baseurl`, session-first + default-user auto-login), the runtime-built default-user settings view, main key/Back handling. Remote payload. |
 | `frontend/css/main.css` | Picker and shared control styling. |
 | `frontend/css/app.css` | Native view / catalog / player / audio now-playing styling (flexbox only). **Fork-only.** Remote payload. |
@@ -229,6 +229,15 @@ The list views also hand the rendered page and the tapped index to `openItem`/`r
 **Play** button can start an ordered list session (`Michelly.playlist`) — see
 [Ordered list playback](#ordered-list-playback-michellyplaylist).
 
+An **Audio** card in a listing (`renderItemsView()` and the grouped album/folder card grids through
+`appendGroupedCards()`) plays **immediately on one activation** via `startListingAudioSession()`, which
+builds an Audio-only queue from the listing exactly like the item-view **Play** button; every non-Audio
+card keeps the `openItem()` path. **Documented trade-off:** the per-track inline actions menu ("Play
+next" / "Add to queue" / "Add to playlist") is no longer reachable from these card listings (it still
+works wherever `#itemView` is opened). A failed immediate-play session stays visible on the listing
+through a listing-scoped status line (`listingStatusText` + `mirrorListingPlayError()`), preserving the
+never-silent contract.
+
 Every selectable card is a `<button class="card">` so the global D-pad selector in `index.js` can reach
 it. Each navigation resets the back stack and pushes **exactly one** handler that recreates its parent,
 so the stack stays bounded no matter how deep the user goes. Missing or failed images swap to a text
@@ -255,7 +264,7 @@ it in `catalog.js` ships the whole change in the payload (`npm run bundle` + pub
 library keeps the folder-grouped card grid above.
 
 **Music home (`#musicView`, runtime-built).** Built in JS on the `ensurePlaylistsView` pattern (the
-shell `index.html` is untouched), it is a static, non-tabbable left rail plus a top bar (**Back** +
+shell `index.html` is untouched), it is a static, non-tabbable rail docked on the **right** plus a top bar (**Back** +
 library title + a **real, tabbable search field** — an inline `<input>` plus a **Search** button, not
 the old visual-only div), nine filter chips (`All`, `A-F`, `G-M`, `N-T`, `U-Z`, `Genres`, `Albums`,
 `Songs`, `Folders`), three shelves and a wrapped artist card grid.
@@ -344,11 +353,13 @@ static and non-tabbable; the shelf is a **wrapped card row, not a horizontal scr
 Left/Right are [no-ops](#assuming-leftright-moves-focus). Focus is seeded into the content grid after
 each render.
 
-**Increment 2 (planned, not implemented).** A bottom now-playing bar, an app-global persistent rail, a
-right contextual panel, a hero gradient band and "Recommended Stations" are **not** part of this
-change. Functional search and the genre/album/song browse dimensions **have** since landed (see the
-music home above); the audio now-playing card's two-column layout and progress bar are a separate
-workstream, not an AIMP tier.
+**Increment 2 (planned, not implemented).** An **app-global persistent rail**, a hero gradient band and
+"Recommended Stations" are **not** part of this change. Functional search and the genre/album/song browse
+dimensions **have** since landed (see the music home above); a **bottom now-playing bar** and a **right
+contextual panel** have also landed, but scoped to `#audioView` (the audio queue panel) — not as
+app-global music-home chrome. The music-view rail now sits on the **right** and an Audio card in a
+listing plays on one activation (see [Audio playback](#audio-playback) below); the display-only progress
+bar remains part of the same workstream, not an AIMP tier.
 
 **Open follow-ups (pending).**
 - The `Genres` / `Albums` / `Songs` dimension fetch is a **bounded ~500-item window with no `Show
@@ -551,7 +562,8 @@ dim; the is-inert/never-`disabled` discipline is otherwise unchanged (`navigate(
 on a disabled button silently fails, which would make the D-pad appear stuck). The buttons stay
 focusable and simply no-op at a boundary. The overlay/card itself stays **always visible**.
 
-**Queue overlay.** `#audioQueueBtn` toggles the inline `#audioQueue` overlay in the card: rows are
+**Queue overlay.** `#audioQueueBtn` toggles the `#audioQueue` panel — a **right-docked** panel of the
+card's `.audio-body` row, rather than the old inline block below the modes: rows are
 **non-tabbable** `<div>`s in play order (head first), with **Clear queue** (`is-inert` while empty)
 and **Close**. Opening pushes **exactly one** back handler while open (the pushed handler does not
 pop; the on-screen buttons do); `Clear queue` re-renders the rows in place with no stack change and
@@ -677,11 +689,13 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
   `Michelly.audio.play(item, userId)`, everything else → `Michelly.player.play(…)`. This fixes the
   pre-existing bug where an audio item was opened in the video player (`/Videos/{id}/stream`).
 - `audio.play()` pushes one back handler **unless a list session is active** (`listMode()`; the playlist
-  already owns the entry), shows `#audioView` and renders the now-playing card. The card (`.audio-now`)
-  is **two-column**: a dominant album-art `.audio-poster` plus an `.audio-detail` info/controls column
-  (title, artist, album, a read-only `.audio-progress` bar, `#audioTime`, the Prev/Next `audio-skip`
-  buttons and the `#audioToggle` Play/Pause button), then runs `POST /Items/{id}/PlaybackInfo` and picks
-  the first direct-stream/direct-play source.
+  already owns the entry), shows `#audioView` and renders the full-view now-playing layout. The card
+  (`.audio-now`) is a column: a `.audio-body` row — the `.audio-stage` album-art `.audio-poster` plus
+  the `.audio-detail` title/artist/album column on the left, the session queue panel `#audioQueue`
+  docked on the **right** — above a **bottom-docked `.audio-bar`** holding the read-only
+  `.audio-progress` bar, `#audioTime`, the Prev/Next `audio-skip` + `#audioToggle` transport and the
+  `#audioRepeat` / `#audioShuffle` / `#audioQueueBtn` mode controls, then runs
+  `POST /Items/{id}/PlaybackInfo` and picks the first direct-stream/direct-play source.
 - The **`.audio-progress` bar is display-only** — it mirrors the video player's `.player-progress`.
   `#audioProgressFill`'s width is set as a percentage, guarded against `NaN`/`0`/`Infinity` durations,
   and refreshed by the same `timeupdate`/`loadedmetadata` events that update `#audioTime`. **Interactive
@@ -717,7 +731,8 @@ Audio items (`Type === 'Audio'`) use a parallel player in `frontend/js/app/audio
 **Deployment status (important).** **Tier 1** (playback modes, queue, generalized item-actions menu)
 is **committed on `master`** at HEAD `0e86bd7`. **Tier 2** (music browse dimensions + shelves +
 functional search), **Tier 3** (dynamic named playlists with lazy legacy migration) and the **audio
-visual identity** (two-column now-playing card + display-only progress bar) are **implemented but
+visual identity** (full-view now-playing layout with a bottom playback bar and a right-docked queue
+panel, plus the display-only progress bar) are **implemented but
 UNCOMMITTED** in the working tree. They were validated **statically only** — `npm run check` green, a
 reviewer approval and tester gates — and have **not** been run on a device/emulator: treat the new
 capabilities as **implemented, pending on-device verification**, not as proven on the TV. Payload files

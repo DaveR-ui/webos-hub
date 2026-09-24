@@ -3,7 +3,7 @@ last_updated: 2026-09-23
 status: active
 description: Hub for the docs/context folder of the webOS media client fork — what belongs here, every file it holds, and what lives elsewhere.
 tags: [hub, context, index, thin-loader, remote-bundle]
-version: 1.7
+version: 1.8
 related: [architecture, webos-3-compatibility, upstream-provenance, hbc-distribution-plan, aimp-design-reference]
 ---
 
@@ -32,7 +32,8 @@ touches source.
 - [architecture.md](architecture.md) — the app shell and views, the thin loader and remote bundle, the
   ES5 media-server REST client, auth/session (incl. the tri-state default-user auto-login), catalog
   browsing (incl. the artist-centric music browse with browse dimensions, shelves and functional
-  search), native playback (ordered-list sessions, the two-column audio now-playing card and dynamic
+  search), native playback (ordered-list sessions, the full-view audio now-playing layout with a bottom
+  playback bar and a right-docked queue panel, and dynamic
   named playlists with lazy legacy migration) and the bundled Luna discovery service.
 - [webos-3-compatibility.md](webos-3-compatibility.md) — webOS 3.0 / Chromium 38 compatibility report:
   what is safe, the concrete defects and the on-device test plan.

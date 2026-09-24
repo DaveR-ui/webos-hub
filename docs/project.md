@@ -3,7 +3,7 @@ last_updated: 2026-09-23
 status: active
 description: Agent-facing entry point for MiChelly, the webOS media client fork — stack, slices, commands, conventions, domain entities and the context index.
 tags: [entry-point, project, webos, media-server, fork, client, thin-loader]
-version: 3.2
+version: 3.3
 doc_language: english
 ---
 
@@ -218,7 +218,8 @@ not part of the current app. See [upstream-provenance](context/upstream-provenan
   and remote bundle, the ES5 media-server REST client, auth/session (`michelly_sessions`) and the
   configurable default-user auto-login (`michelly_default_user`), catalog browsing (incl. the music
   browse dimensions, shelves and functional search), native playback (ordered-list sessions, the
-  two-column audio now-playing card and dynamic named playlists with lazy legacy migration) and the
+  full-view audio now-playing layout with a bottom playback bar and a right-docked queue panel, and
+  dynamic named playlists with lazy legacy migration) and the
   bundled Luna service.
 - [`context/webos-3-compatibility.md`](context/webos-3-compatibility.md) — webOS 3.0 / Chromium 38
   compatibility report: what is safe, the concrete defects and the on-device test plan.

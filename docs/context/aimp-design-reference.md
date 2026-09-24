@@ -3,7 +3,7 @@ last_updated: 2026-09-23
 status: active
 description: Design-reference mining AIMP6 (native Linux player) for transferable IA and state models — library, playlist/queue and shell patterns — mapped against MiChelly's surfaces with feasibility verdicts. Tier 1 (modes, queue, item-actions menu) implemented and committed; Tiers 2–3 (browse dimensions/search, dynamic playlists) implemented but uncommitted, pending on-device verification.
 tags: [design-reference, aimp, idea-mining, library, playlist, queue, ux, d-pad, feasibility]
-version: 1.1
+version: 1.2
 related: [architecture, webos-3-compatibility, hbc-distribution-plan]
 ---
 
@@ -155,10 +155,11 @@ read it as proven on the TV.
   detail now ships Move up / Move down. **Known follow-up (pending human confirmation):** a server
   with no legacy record now shows an empty playlist list with a **New playlist** button instead of
   three empty `Playlist 1/2/3` slots.
-- **Also landed — not an AIMP tier** — the audio now-playing card is now **two-column** (dominant
-  album art + an info/controls column) with a **display-only** `.audio-progress` bar mirroring the
-  video player's `.player-progress`. Interactive scrubbing stays out of scope because Left/Right are
-  intentional D-pad no-ops.
+- **Also landed — not an AIMP tier** — the audio now-playing view is now a **full-view layout**: a
+  `.audio-body` row (album art + title/artist/album on the left, the session queue panel docked on the
+  **right**) above a **bottom-docked `.audio-bar`** holding the transport and mode controls, with a
+  **display-only** `.audio-progress` bar mirroring the video player's `.player-progress`. Interactive
+  scrubbing stays out of scope because Left/Right are intentional D-pad no-ops.
 - **Explicitly not cloned** — skins / engine, bookmarks, A-B repeat, drag-drop gestures,
   multi-window docking, tag editing.
 

@@ -499,10 +499,13 @@
 
 #audioView {
     background: #1A0F33;
-    -webkit-align-items: center;
-    align-items: center;
-    -webkit-justify-content: center;
-    justify-content: center;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-align-items: stretch;
+    align-items: stretch;
+    -webkit-justify-content: flex-start;
+    justify-content: flex-start;
+    overflow: hidden;
 }
 
 #playerAudio {
@@ -512,28 +515,75 @@
     overflow: hidden;
 }
 
-/* Two-column player card: dominant album art on the left, info + controls on the right.
- * flex-wrap lets the detail column drop below the art on a narrow width (Chromium 38:
- * flexbox only, no grid, no gap, no custom properties). */
+/* Full-view now-playing layout: a row body (content stage + right queue panel) above a
+ * bottom-docked playback bar. Flexbox only (Chromium 38): no grid, no gap, no custom
+ * properties. The view is a column flex; .audio-body takes the remaining height and the
+ * bar is pinned with margin-top:auto, so a short/narrow TV screen never overflows. */
 .audio-now {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+    padding: 1.5rem 2rem;
+    background: #241B3D;
+    text-align: left;
+}
+
+/* Row body: content stage on the left, queue panel on the right. flex:1 + min-height:0
+ * let the stage/panel scroll internally instead of pushing the bar off-screen. */
+.audio-body {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: row;
+    flex-direction: row;
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    -webkit-align-items: stretch;
+    align-items: stretch;
+}
+
+/* Content stage: album art + info column. It is the flex-grow region and the scroll
+ * container when the art is taller than a short screen. */
+.audio-stage {
     display: -webkit-flex;
     display: flex;
     -webkit-flex-direction: row;
     flex-direction: row;
     -webkit-flex-wrap: wrap;
     flex-wrap: wrap;
+    -webkit-flex: 1 1 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
     -webkit-align-items: flex-start;
     align-items: flex-start;
     -webkit-justify-content: center;
     justify-content: center;
-    width: 82%;
-    max-width: 56rem;
-    padding: 2rem;
-    background: #241B3D;
-    border: 2px solid #3A2E5C;
-    border-radius: 0.9rem;
-    box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.45);
-    text-align: left;
+}
+
+/* Bottom-docked playback bar. margin-top:auto pins it to the bottom of the column even
+ * if the body does not grow; border-top separates it from the content. */
+.audio-bar {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    width: 100%;
+    margin-top: auto;
+    padding-top: 0.8rem;
+    border-top: 2px solid #3A2E5C;
 }
 
 .audio-poster {
@@ -606,7 +656,7 @@
 .audio-progress {
     width: 100%;
     height: 0.5rem;
-    margin-top: 1.2rem;
+    margin-top: 0;
     background: #3A2E5C;
     border-radius: 0.25rem;
     overflow: hidden;
@@ -708,10 +758,11 @@
     margin: 0.4rem 0.5rem;
 }
 
-/* Inline session-queue overlay (built in audio.js, hidden until the Queue toggle opens
- * it). Mirrors the .playlist-picker visual language: bordered card on the darker panel,
- * flexbox only (Chromium 38) - no grid, no gap, no custom properties; margin spacing.
- * Visibility is inline-style driven from audio.js (closed at card build, shown on open). */
+/* Right-side session-queue panel (built in audio.js, hidden until the Queue toggle opens
+ * it). Bounded width, stretched to the body height, its own vertical scroll; the border /
+ * background keep the .playlist-picker visual language. Flexbox only (Chromium 38) - no
+ * grid, no gap, no custom properties; margin spacing. Visibility is inline-style driven
+ * from audio.js (closed at card build, shown on open). */
 
 .audio-queue {
     display: -webkit-flex;
@@ -720,9 +771,18 @@
     flex-direction: column;
     -webkit-align-items: stretch;
     align-items: stretch;
-    width: 100%;
-    margin-top: 1.2rem;
+    -webkit-flex: 0 0 auto;
+    flex: 0 0 auto;
+    width: 20rem;
+    max-width: 30%;
+    -webkit-align-self: stretch;
+    align-self: stretch;
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+    margin-left: 1rem;
     padding: 0.8rem;
+    overflow-y: auto;
+    overflow-x: hidden;
     background: #2E2350;
     border: 2px solid #3A2E5C;
     border-radius: 0.6rem;
@@ -1234,14 +1294,17 @@ input.playlist-name-input:focus {
  * inner axis and the background are set here. */
 #musicView,
 #artistView {
-    -webkit-flex-direction: row;
-    flex-direction: row;
+    -webkit-flex-direction: row-reverse;
+    flex-direction: row-reverse;
     overflow: hidden;
     background: #1A0F33;
 }
 
-/* Static, non-tabbable side rail (plain div/span children only). 16rem plus border-box keeps it
- * from pushing the main column off a narrow/short TV; it has no fixed height. */
+/* Static, non-tabbable side rail on the RIGHT of the music views: with row-reverse the
+ * DOM-first .music-rail (appended before .music-main) is laid out at the right edge and
+ * .music-main on the left. The D-pad walk is DOM order and the rail has no tabbables, so
+ * it is unaffected. 16rem plus border-box keeps it from pushing the main column off a
+ * narrow/short TV; it has no fixed height. */
 .music-rail {
     -webkit-flex: 0 0 auto;
     flex: 0 0 auto;
@@ -1256,7 +1319,7 @@ input.playlist-name-input:focus {
     overflow-y: auto;
     overflow-x: hidden;
     background: #1A0F33;
-    border-right: 2px solid #3A2E5C;
+    border-left: 2px solid #3A2E5C;
 }
 
 .music-rail-brand {

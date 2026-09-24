@@ -2234,12 +2234,59 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
+    // One-activation playback for Audio cards in the generic listings (folder/album grids
+    // and grouped music browse). Activating an Audio track starts an ordered audio session
+    // at that track immediately, instead of opening #itemView and requiring a second Play
+    // press. Documented trade-off: this removes the per-track inline actions menu ("Play
+    // next" / "Add to queue" / "Add to playlist", opened from #itemView) from these card
+    // listings — the intended cost of the one-activation behaviour, matching the
+    // already-immediate-play surfaces (Songs dimension, search results, shelves). The
+    // actions menu still works wherever #itemView is opened (e.g. artist loose tracks).
+    //
+    // Builds an Audio-only queue from the listing items exactly like startAudioSession();
+    // returns false when the tapped item is not in that queue, so the caller can fall back
+    // to the existing openItem() behaviour. rerender recreates the listing for the
+    // session's end-of-session return target and for the never-silent failure mirror.
+    function startListingAudioSession(items, item, userId, rerender) {
+        var queue = [];
+        var index = -1;
+        var i;
+
+        for (i = 0; items && i < items.length; i++) {
+            if (items[i] && items[i].Type === 'Audio') {
+                if (items[i].Id === item.Id) {
+                    index = queue.length;
+                }
+                queue.push(items[i]);
+            }
+        }
+
+        if (index < 0) {
+            return false;
+        }
+
+        ensureItemErrorSlot();
+        playlistStart(queue, index, userId, function () {
+            rerender();
+            mirrorListingPlayError(rerender);
+        });
+
+        return true;
+    }
+
     function renderItemsView(container, title, items, total, startIndex, limit, userId, opts) {
         ui().clear(container);
 
         var header = ui().el('div', 'browse-header');
         header.appendChild(ui().el('h1', 'browse-title', title || 'Browse'));
         container.appendChild(header);
+
+        // A failed immediate-play session left a message for the next listing render; show
+        // it near the top, then clear it so it cannot leak into an unrelated listing.
+        if (listingStatusText) {
+            container.appendChild(ui().el('div', 'music-status', listingStatusText));
+            listingStatusText = '';
+        }
 
         var pager = ui().el('div', 'pager');
 
@@ -2272,12 +2319,22 @@ var Michelly = window.Michelly = window.Michelly || {};
         var list = ui().el('div', 'card-list');
         container.appendChild(list);
 
+        // Recreates this listing page; used both as openItem's back handler and as the
+        // audio session's return target (mirrors the historical back behaviour).
+        var rerenderListing = function () {
+            var backOpts = cloneOpts(opts);
+            backOpts.StartIndex = startIndex;
+            openItems(opts.ParentId, userId, backOpts);
+        };
+
         renderCardList(list, items, function (item) {
-            openItem(item.Id, userId, function () {
-                var backOpts = cloneOpts(opts);
-                backOpts.StartIndex = startIndex;
-                openItems(opts.ParentId, userId, backOpts);
-            }, items, items.indexOf(item));
+            // An Audio track plays immediately on one activation (see
+            // startListingAudioSession); every other card keeps the openItem path.
+            if (item.Type === 'Audio' && startListingAudioSession(items, item, userId, rerenderListing)) {
+                return;
+            }
+
+            openItem(item.Id, userId, rerenderListing, items, items.indexOf(item));
         }, 'This folder is empty.');
 
         focusFirstCard(container);
@@ -2455,6 +2512,12 @@ var Michelly = window.Michelly = window.Michelly || {};
     function appendGroupedCards(listEl, media, userId, backFn) {
         for (var i = 0; i < media.length; i++) {
             listEl.appendChild(makeCard(media[i], function (item) {
+                // An Audio track plays immediately on one activation; every other card
+                // keeps the openItem path. backFn recreates the grouped listing.
+                if (item.Type === 'Audio' && startListingAudioSession(media, item, userId, backFn)) {
+                    return;
+                }
+
                 openItem(item.Id, userId, backFn, media, media.indexOf(item));
             }));
         }
@@ -2466,6 +2529,13 @@ var Michelly = window.Michelly = window.Michelly || {};
         var header = ui().el('div', 'browse-header');
         header.appendChild(ui().el('h1', 'browse-title', title || 'Browse'));
         container.appendChild(header);
+
+        // A failed immediate-play session left a message for the next listing render; show
+        // it near the top, then clear it so it cannot leak into an unrelated listing.
+        if (listingStatusText) {
+            container.appendChild(ui().el('div', 'music-status', listingStatusText));
+            listingStatusText = '';
+        }
 
         var hasMore = typeof total === 'number' && items.length < total;
         var model = buildGroupedModel(items, parentId);
@@ -2986,6 +3056,13 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     // One status line shared by the two music screens (only one is visible at a time).
     var musicStatusText = '';
+
+    // Listing-scoped failure message for the generic browse listings (renderItemsView /
+    // renderGroupedView), which have no music-home/artist status line of their own. Set by
+    // mirrorListingPlayError() after a failed immediate-play session and rendered once at
+    // the top of the next listing render, then cleared so it cannot leak into an unrelated
+    // listing.
+    var listingStatusText = '';
 
     // True while the genre drill-down's single back entry is on the stack (F3). Back pops
     // it before invoking backToGenres(), which clears this flag; leaving the drill-down by
@@ -4684,6 +4761,38 @@ var Michelly = window.Michelly = window.Michelly || {};
             }
 
             musicStatusText = msg;
+            rerender();
+        }, 0);
+    }
+
+    // Listing-scoped sibling of musicMirrorPlayError for the generic browse listings
+    // (renderItemsView / renderGroupedView), which have no music-home/artist status line.
+    // Same shape: the players stop first (running our return target back onto the listing)
+    // and write #itemError after, and a failed PlaybackInfo additionally re-shows the shell
+    // #itemView. One tick later, surface a non-empty #itemError on the listing status line.
+    // #itemError is a foreign node: never write or clear it.
+    function mirrorListingPlayError(rerender) {
+        ensureItemErrorSlot();
+
+        setTimeout(function () {
+            var slot = document.querySelector('#itemError');
+
+            if (!slot) {
+                return;
+            }
+
+            var msg = String(slot.textContent || '').replace(/^\s+|\s+$/g, '');
+
+            if (!msg) {
+                return;
+            }
+
+            // Nothing to mirror when the user has left the listing flow entirely.
+            if (!isViewActive('browseView') && !isViewActive('itemView')) {
+                return;
+            }
+
+            listingStatusText = msg;
             rerender();
         }, 0);
     }

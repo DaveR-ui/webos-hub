@@ -3,7 +3,7 @@ last_updated: 2026-09-23
 status: active
 description: webOS 3.0 / Chromium 38 compatibility report for the MiChelly media client — what is safe in the shipped ES5 app and thin loader, the concrete defects, the deferred security debt and the on-device test needed to close the question.
 tags: [webos-3, chromium-38, es5, polyfill, compatibility, legacy, thin-loader, sha256, array-includes, disablebackhistoryapi, requiredacg, security-debt, playlist, search, browse-dimensions, audio-progress]
-version: 2.7
+version: 2.8
 related: [architecture, upstream-provenance, hbc-distribution-plan]
 ---
 
@@ -49,7 +49,7 @@ The concrete target is **Chromium 38**.
 | `Array.prototype.includes` | **Polyfilled at the top of `frontend/js/index.js`** (ES5, installed before the `webOS.deviceInfo(...)` call). Covers the `webOSTV.js` `getSystemInfo` `missingConfigs` path. |
 | CSS | `frontend/css/app.css` and `frontend/css/main.css` are **flexbox-only** with `-webkit-` prefixes. **No CSS grid** (Chrome 57+) is used anywhere. |
 | Inline music search (`<input>`) | A real `<input type="text">` + Search `<button>` in the music topbar (`catalog.js:3126-3155`), built with `document.createElement` and DOM0 `onkeydown`/`onclick`. Native form control on Chromium 38; the `placeholder` attribute is supported (Chrome 4+). No new engine feature. |
-| Audio progress bar (`.audio-progress`) | Plain `<div>`s whose `#audioProgressFill` width is set as a `%` string (`audio.js:243`, `610-614`), driven by the same `timeupdate`/`loadedmetadata` listeners as `#audioTime`. No `<progress>` element and no new engine feature; **display-only** (Left/Right are D-pad no-ops, so there is no scrub). |
+| Audio progress bar (`.audio-progress`) | Plain `<div>`s whose `#audioProgressFill` width is set as a `%` string (`audio.js:243`, `624-627`), driven by the same `timeupdate`/`loadedmetadata` listeners as `#audioTime`. No `<progress>` element and no new engine feature; **display-only** (Left/Right are D-pad no-ops, so there is no scrub). |
 | Playlist editor controls | `#playlistsView` create/rename text editor, Move up/down, Disable/Enable and Delete controls (`catalog.js:1850-2068`) are `document.createElement`'d `<button>`s / `<input>`s with DOM0 handlers; boundary buttons dim (`is-inert`) and are **never** `disabled`. No new engine feature. |
 
 > Caveat: the `const` behaviour on Chromium 38 is the one claim that could not be verified against a
@@ -110,8 +110,9 @@ What must run on Chromium 38 is the app itself, and it does so with a small, fix
   `document.createElement`, flexbox-only, every control a `<button>`; the browse-dimension chips,
   shelves and the **real inline search `<input>`** are all native controls with **no new engine
   feature**;
-- the two-column audio now-playing card with its **display-only** `.audio-progress` bar — plain
-  `<div>` width percentages, no `<progress>` element, no new engine feature;
+- the full-view audio now-playing layout (a bottom `.audio-bar` holding the progress/time/transport/mode
+  controls, with the session queue panel docked on the right) and its **display-only** `.audio-progress`
+  bar — plain `<div>` width percentages, no `<progress>` element, no new engine feature;
 - the `#playlistsView` editor (create/rename input, reorder and soft-disable buttons) — runtime-built
   DOM with DOM0 handlers, no new engine feature;
 - the thin loader: synchronous pure-JS SHA-256, `XMLHttpRequest` `arraybuffer` fetches and inline
@@ -243,7 +244,7 @@ On-device test checklist for the target webOS 3.0 TV:
 > `css/app.css`); it reaches the TV only after `npm run bundle` + a publish. Tier 1 (modes, queue,
 > item-actions menu) is **committed on `master`** (HEAD `0e86bd7`); Tier 2 (browse dimensions,
 > shelves, functional search), Tier 3 (dynamic named playlists) and the audio visual identity
-> (two-column card + progress bar) are **uncommitted** in the working tree and were validated
+> (bottom-bar + right-panel now-playing layout + progress bar) are **uncommitted** in the working tree and were validated
 > **statically only** (`npm run check`, reviewer, tester gates) — **not run on a device/emulator**.
 > Verify the deployed bundle version (`window.MichellyShell`) before judging any item below.
 
@@ -298,6 +299,9 @@ On-device test checklist for the target webOS 3.0 TV:
 - [ ] A **mixed Audio/Video** list plays each item with its own player and still uses exactly one back
       entry per session.
 - [ ] Audio item **Play** opens `#audioView` and shows the now-playing card (poster/title/artist/album).
+- [ ] Selecting an **Audio** card in a listing (folder/album grid, grouped music browse) plays it
+      **immediately on one activation**; a non-Audio card still opens the item view (audio visual
+      identity, uncommitted).
 - [ ] Audio playback starts for an MP3/WAV/Ogg item; OK/Space toggles play/pause, Back stops and returns to item detail.
 - [ ] A FLAC item is expected to **fail** on Chromium 38 (native `<audio>` FLAC is Chrome 56+) — record the error text.
 - [ ] An unsupported codec surfaces a **codec-aware** message in `#itemError` (e.g.
@@ -312,9 +316,12 @@ On-device test checklist for the target webOS 3.0 TV:
       offers **Retry** (Tier 2, uncommitted).
 - [ ] Music home: the **Recently added** and **Most played** shelves render when the server returns
       items and each is hidden when empty (Tier 2, uncommitted).
-- [ ] Audio now-playing card is **two-column** (album art + info/controls column) and the
-      `.audio-progress` bar advances with `timeupdate`/`loadedmetadata`; it is **display-only**
-      (Left/Right do nothing) (audio visual identity, uncommitted).
+- [ ] Music home / artist view: the static, non-tabbable rail sits on the **right** and the Up/Down walk
+      is unaffected (audio visual identity, uncommitted).
+- [ ] Audio now-playing layout is **full-view**: the `.audio-bar` (progress + `#audioTime` +
+      Prev/Play/Next + Repeat/Shuffle/Queue) is docked at the **bottom** and the `#audioQueue` panel
+      docks on the **right**; the `.audio-progress` bar advances with `timeupdate`/`loadedmetadata` and
+      is **display-only** (Left/Right do nothing) (audio visual identity, uncommitted).
 - [ ] `#playlistsView`: **New playlist** creates one, **Rename** edits the name, **Delete** arms an
       inline Yes/No confirm; the detail offers **Move up/down** (reorder), **Disable/Enable** (Play
       skips disabled tracks) and **Remove**; hardware Back returns to the playlist list on one press
