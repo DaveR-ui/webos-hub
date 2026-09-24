@@ -768,19 +768,28 @@ var Michelly = window.Michelly = window.Michelly || {};
         pendingQueue = [];
     }
 
-    /* In-app user-built playlists (Scope A). Three preset slots, keyed by server id in
+    /* In-app user-built playlists (Tier 3: dynamic named playlists), keyed by server id in
      * localStorage (deliberate alignment with michelly_sessions, auth.js:13-18) and played
      * through the session model above. This store is fork-owned and
      * deliberately NOT an api.js call: server-side playlists are out of scope (TV-only, single
      * client). The manage view and the add-from-item picker are built here in catalog.js so a
      * single owner holds the domain and the back-stack discipline; the runtime-built-view and
-     * try/catch localStorage patterns are copied from index.js / auth.js. */
+     * try/catch localStorage patterns are copied from index.js / auth.js.
+     *
+     * Store shape: 'michelly_playlists_v2' = { "<serverId>": { playlists: [ {id, name, items:[entry…]} ] } }.
+     * The pre-Tier-3 'michelly_playlists' 3-slot store is now READ-ONLY — it is never written or
+     * deleted again, so a downgrade to an older build cannot lose TV-side playlists. A v2 record
+     * missing for a server is lazily migrated in memory from that legacy store on every read until
+     * the first mutation persists it. */
 
-    var PLAYLISTS_KEY = 'michelly_playlists';
-    var SLOT_COUNT = 3;
-    var SLOT_NAMES = ['Playlist 1', 'Playlist 2', 'Playlist 3'];
+    var PLAYLISTS_KEY = 'michelly_playlists';       // legacy 3-slot store, read-only from now on
+    var PLAYLISTS_V2_KEY = 'michelly_playlists_v2'; // dynamic named-playlist store
+    var SLOT_COUNT = 3;                             // legacy slot count (migration source only)
+    var SLOT_NAMES = ['Playlist 1', 'Playlist 2', 'Playlist 3']; // legacy slot names (migration only)
+    var PL_DEFAULT_NAME = 'New playlist';
+    var plIdSeq = 0;                                // module counter for stable-ish created ids
 
-    // The key for this server's slots inside michelly_playlists, set once per connect by
+    // The key for this server's playlists inside both stores, set once per connect by
     // index.js afterConnect -> setServerId(current_server_id). The server's stable Id wins
     // over its baseUrl on purpose (same key michelly_sessions uses): playlists survive
     // address/port changes, and orphaning happens only if the server's own Id changes
@@ -806,9 +815,16 @@ var Michelly = window.Michelly = window.Michelly || {};
     }
 
     // Manage-view UI state (module-level, reset on every entry into the view).
-    var plSlotDetail = null;  // index of the open slot detail, or null for the slot list
-    var plClearRow = null;    // index whose 'Clear' is awaiting an inline confirm
-    var plStatusText = '';    // transient manage-view status line
+    var plDetailId = null;   // id of the open playlist detail, or null for the playlist list
+    var plConfirmId = null;  // playlist id whose 'Delete' is awaiting an inline confirm
+    var plEditor = null;     // null, or {mode:'create'|'rename', id:string|null, draft:string|null} while editing
+    var plStatusText = '';   // transient manage-view status line
+
+    // Focus anchor for the playlist detail (F1): a detail-row action (Move up/down,
+    // Disable/Enable, Remove) records which row should keep focus, and renderPlaylists()
+    // consumes it so the D-pad stays on that row's Move up button instead of snapping back
+    // to the first button in the whole view. Shape: {playlistId, position} or null.
+    var plFocus = null;
 
     // True between a manage-play session's teardown and its deferred mirror tick (item 1):
     // it lets the tick tell the player's post-stop #itemView hijack from any other state.
@@ -843,7 +859,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
 
         if (!parsed || typeof parsed !== 'object' || parsed instanceof Array) {
-            // An array blob would pass a plain typeof-'object' test; saveSlots writing expando
+            // An array blob would pass a plain typeof-'object' test; savePlaylists writing expando
             // keys onto an array would then be silently dropped by JSON.stringify — a false
             // 'success' with data loss. Treat it as an empty store.
             return null;
@@ -883,47 +899,198 @@ var Michelly = window.Michelly = window.Michelly || {};
         return out;
     }
 
-    // This server's three slots (a fresh, normalised copy; never a live reference into
-    // storage). Without a server id (before afterConnect wires one, or a server reporting no
-    // Id) reads behave exactly like absent store data: fresh empty slots, no crash.
-    function readSlots() {
+    // Whole v2-store read as a plain object, or null when absent/unparseable/not-an-object.
+    // Same corruption convention as readPlaylistsStore: a malformed top level counts as an
+    // empty store (the per-server record is then simply absent and migration applies).
+    function readPlaylistsV2Store() {
+        var raw = null;
+
+        try {
+            raw = localStorage.getItem(PLAYLISTS_V2_KEY);
+        } catch (err) {
+            return null;
+        }
+
+        if (!raw) {
+            return null;
+        }
+
+        var parsed;
+
+        try {
+            parsed = JSON.parse(raw);
+        } catch (err2) {
+            return null;
+        }
+
+        if (!parsed || typeof parsed !== 'object' || parsed instanceof Array) {
+            // An array blob would pass a plain typeof-'object' test; writing expando keys onto
+            // it would then be silently dropped by JSON.stringify. Treat it as an empty store.
+            return null;
+        }
+
+        return parsed;
+    }
+
+    // A stable id for a playlist migrated from legacy slot index. It is deterministic (not
+    // counter/clock based) on purpose: migration is recomputed in memory on every read until the
+    // first mutation persists it, so a reader that renders ids and a later click that resolves one
+    // MUST see the same id. A 'pl-legacy-N' id is unique because created ids always start 'pl'.
+    function legacyPlaylistId(index) {
+        return 'pl-legacy-' + (index + 1);
+    }
+
+    // A fresh id for a user-created playlist. The WebCrypto UUID helper is Chrome 92+, far above
+    // the Chromium 38 floor, so Date.now + a module counter keeps ids unique without it.
+    function newPlaylistId() {
+        plIdSeq = plIdSeq + 1;
+        return 'pl' + Date.now() + '-' + plIdSeq;
+    }
+
+    // Normalise one playlist record into {id, name, items}, or null when it is unusable (a
+    // malformed playlist is dropped by the caller without destroying its siblings). id must be
+    // a non-empty string; name falls back to 'Playlist'; items must be an Array and only
+    // Audio entries survive (the same per-entry filter normalizeSlots applies). An entry's
+    // optional Disabled === true flag is preserved as-is.
+    function normalizePlaylist(record) {
+        if (!record || typeof record !== 'object') {
+            return null;
+        }
+
+        if (typeof record.id !== 'string' || !record.id) {
+            return null;
+        }
+
+        if (!(record.items instanceof Array)) {
+            return null;
+        }
+
+        var name = 'Playlist';
+
+        if (typeof record.name === 'string' && record.name.replace(/^\s+|\s+$/g, '')) {
+            name = record.name;
+        }
+
+        var items = [];
+
+        for (var k = 0; k < record.items.length; k++) {
+            var entry = record.items[k];
+
+            if (entry && typeof entry === 'object' && entry.Id && entry.Type === 'Audio') {
+                items.push(entry);
+            }
+        }
+
+        return { id: record.id, name: name, items: items };
+    }
+
+    // Normalise one server's v2 record into a playlists array, or null when the record is
+    // missing/malformed. An empty playlists array is VALID (a user who deleted every playlist
+    // must not be re-migrated); only a non-object record or a non-Array playlists field falls
+    // through to migration.
+    function normalizePlaylistsRecord(record) {
+        if (!record || typeof record !== 'object' || !(record.playlists instanceof Array)) {
+            return null;
+        }
+
+        var out = [];
+
+        for (var i = 0; i < record.playlists.length; i++) {
+            var pl = normalizePlaylist(record.playlists[i]);
+
+            if (pl) {
+                out.push(pl);
+            }
+        }
+
+        return out;
+    }
+
+    // Lazy, in-memory migration from the read-only legacy 3-slot store, recomputed on every read
+    // until the first mutation persists it. A valid legacy record always becomes three playlists
+    // named 'Playlist 1/2/3' carrying each slot's items (copied; normalizeSlots already dropped
+    // foreign entries). No valid legacy record at all (fresh install, or a corrupt/missing one)
+    // yields no playlists — the user then creates their own.
+    function migrateLegacyPlaylists() {
+        var key = plServerId;
+        var legacyStore = readPlaylistsStore();
+        var slots = (legacyStore && legacyStore.hasOwnProperty(key)) ? normalizeSlots(legacyStore[key]) : null;
+
+        if (!slots) {
+            return [];
+        }
+
+        var out = [];
+
+        for (var i = 0; i < SLOT_COUNT; i++) {
+            out.push({
+                id: legacyPlaylistId(i),
+                name: SLOT_NAMES[i],
+                items: slots[i].slice(0)
+            });
+        }
+
+        return out;
+    }
+
+    // This server's playlists (a fresh, normalised copy; never a live reference into storage).
+    // A valid v2 record — including an empty playlists array — wins and is returned verbatim; a
+    // missing or malformed per-server record (or a corrupt top-level v2 blob) falls through to
+    // the in-memory legacy migration above. Without a server id reads behave like absent data.
+    function readPlaylists() {
         var key = plServerId;
 
         if (!key) {
-            return freshSlots();
+            return [];
         }
 
-        var store = readPlaylistsStore();
-        var norm = (store && store.hasOwnProperty(key)) ? normalizeSlots(store[key]) : null;
+        var store = readPlaylistsV2Store();
+        var norm = (store && store.hasOwnProperty(key)) ? normalizePlaylistsRecord(store[key]) : null;
 
-        return norm || freshSlots();
+        if (norm) {
+            return norm;
+        }
+
+        return migrateLegacyPlaylists();
     }
 
-    // Write this server's slots back, preserving every other server's key. A falsy id must
-    // never be persisted under a '' key, so it fails like a storage error: callers surface
-    // 'Could not save the playlist.' (never-silent holds; auth.js guards its serverId alike).
-    function saveSlots(slots) {
+    // Write this server's playlists back, preserving every other server's v2 key
+    // (read-modify-write). The legacy key is never touched. A falsy id must never be persisted
+    // under a '' key, so it fails like a storage error: callers surface 'Could not save the
+    // playlist.' (never-silent holds; auth.js guards its serverId alike).
+    function savePlaylists(playlists) {
         var key = plServerId;
 
         if (!key) {
             return false;
         }
 
-        var store = readPlaylistsStore();
+        var store = readPlaylistsV2Store();
 
         if (!store) {
             store = {};
         }
 
-        store[key] = { slots: slots };
+        store[key] = { playlists: playlists };
 
         try {
-            localStorage.setItem(PLAYLISTS_KEY, JSON.stringify(store));
+            localStorage.setItem(PLAYLISTS_V2_KEY, JSON.stringify(store));
         } catch (err) {
             return false;
         }
 
         return true;
+    }
+
+    // Index of the playlist with this id in a normalised array, or -1.
+    function findPlaylist(playlists, id) {
+        for (var i = 0; i < playlists.length; i++) {
+            if (playlists[i].id === id) {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     // Persist an item with the minimum the row renderer and the audio player need.
@@ -941,71 +1108,237 @@ var Michelly = window.Michelly = window.Michelly || {};
         return entry;
     }
 
-    /* Public store surface (namespace.playlists). */
+    /* Public store surface (namespace.playlists): dynamic named playlists plus the legacy
+     * index-based aliases kept as thin wrappers over the same model. */
 
-    function listSlots() {
-        var slots = readSlots();
+    // [{id, name, count}] for this server's playlists, in stored order.
+    function listPlaylists() {
+        var playlists = readPlaylists();
         var out = [];
 
-        for (var i = 0; i < SLOT_COUNT; i++) {
-            out.push({ name: SLOT_NAMES[i], count: slots[i] ? slots[i].length : 0 });
+        for (var i = 0; i < playlists.length; i++) {
+            out.push({
+                id: playlists[i].id,
+                name: playlists[i].name,
+                count: playlists[i].items.length
+            });
+        }
+
+        return out;
+    }
+
+    // A copy of one playlist's items (never a live reference into storage); [] for an unknown id.
+    function getPlaylistItems(id) {
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return [];
+        }
+
+        return playlists[index].items.slice(0);
+    }
+
+    // Append an item. Same 'added'/'duplicate'/'error' contract and Id duplicate guard as the
+    // legacy addToSlot; a blank/unknown playlist id is an error like a storage failure.
+    function addItemToPlaylist(id, item) {
+        if (!item || !item.Id) {
+            return 'error';
+        }
+
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return 'error';
+        }
+
+        var items = playlists[index].items;
+
+        for (var k = 0; k < items.length; k++) {
+            if (items[k].Id === item.Id) {
+                return 'duplicate';
+            }
+        }
+
+        items.push(playlistEntry(item));
+
+        return savePlaylists(playlists) ? 'added' : 'error';
+    }
+
+    // Remove the item at position. Bounds-checked; a failed write returns false (never silent).
+    function removePlaylistItem(id, position) {
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return false;
+        }
+
+        var items = playlists[index].items;
+
+        if (position < 0 || position >= items.length) {
+            return false;
+        }
+
+        items.splice(position, 1);
+
+        return savePlaylists(playlists);
+    }
+
+    // Move one item to a new index. Bounds-checked; a no-op (out of range or same index) returns
+    // false without a write.
+    function movePlaylistItem(id, from, to) {
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return false;
+        }
+
+        var items = playlists[index].items;
+
+        if (from < 0 || from >= items.length || to < 0 || to >= items.length || from === to) {
+            return false;
+        }
+
+        var moved = items.splice(from, 1)[0];
+        items.splice(to, 0, moved);
+
+        return savePlaylists(playlists);
+    }
+
+    // Set/clear the per-item soft-disable flag. Bounds-checked; persists.
+    function setItemDisabled(id, position, disabled) {
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return false;
+        }
+
+        var items = playlists[index].items;
+
+        if (position < 0 || position >= items.length) {
+            return false;
+        }
+
+        if (disabled) {
+            items[position].Disabled = true;
+        } else {
+            // "Clears" the flag: normalizePlaylist only preserves Disabled === true, so deleting
+            // the property is equivalent to setting it false and keeps the stored entry minimal.
+            delete items[position].Disabled;
+        }
+
+        return savePlaylists(playlists);
+    }
+
+    // Create a playlist (name trimmed; blank falls back to 'New playlist') and return its id, or
+    // false on a storage-write failure.
+    function createPlaylist(name) {
+        var trimmed = (typeof name === 'string') ? name.replace(/^\s+|\s+$/g, '') : '';
+        var playlists = readPlaylists();
+        var id = newPlaylistId();
+
+        playlists.push({ id: id, name: trimmed || PL_DEFAULT_NAME, items: [] });
+
+        if (!savePlaylists(playlists)) {
+            return false;
+        }
+
+        return id;
+    }
+
+    // Rename a playlist. Trimmed; a blank name or an unknown id is rejected (false, no write).
+    function renamePlaylist(id, name) {
+        var trimmed = (typeof name === 'string') ? name.replace(/^\s+|\s+$/g, '') : '';
+
+        if (!trimmed) {
+            return false;
+        }
+
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return false;
+        }
+
+        playlists[index].name = trimmed;
+
+        return savePlaylists(playlists);
+    }
+
+    // Delete a playlist (items and all). Unknown id returns false, no write.
+    function deletePlaylist(id) {
+        var playlists = readPlaylists();
+        var index = findPlaylist(playlists, id);
+
+        if (index < 0) {
+            return false;
+        }
+
+        playlists.splice(index, 1);
+
+        return savePlaylists(playlists);
+    }
+
+    /* Legacy index-based aliases over the dynamic model. Kept so documented contracts (including
+     * the Id duplicate guard and outcome strings) survive unchanged; they address playlists by
+     * their position in listPlaylists(). */
+
+    function listSlots() {
+        var playlists = listPlaylists();
+        var out = [];
+
+        for (var i = 0; i < playlists.length; i++) {
+            out.push({ name: playlists[i].name, count: playlists[i].count });
         }
 
         return out;
     }
 
     function getSlotItems(index) {
-        if (index < 0 || index >= SLOT_COUNT) {
+        var playlists = listPlaylists();
+
+        if (index < 0 || index >= playlists.length) {
             return [];
         }
 
-        return readSlots()[index].slice(0);
+        return getPlaylistItems(playlists[index].id);
     }
 
     function addToSlot(index, item) {
-        if (index < 0 || index >= SLOT_COUNT || !item || !item.Id) {
+        var playlists = listPlaylists();
+
+        if (index < 0 || index >= playlists.length) {
             return 'error';
         }
 
-        var slots = readSlots();
-        var arr = slots[index];
-
-        for (var k = 0; k < arr.length; k++) {
-            if (arr[k].Id === item.Id) {
-                return 'duplicate';
-            }
-        }
-
-        arr.push(playlistEntry(item));
-
-        return saveSlots(slots) ? 'added' : 'error';
+        return addItemToPlaylist(playlists[index].id, item);
     }
 
     function removeAt(index, position) {
-        if (index < 0 || index >= SLOT_COUNT) {
+        var playlists = listPlaylists();
+
+        if (index < 0 || index >= playlists.length) {
             return false;
         }
 
-        var slots = readSlots();
-
-        if (position < 0 || position >= slots[index].length) {
-            return false;
-        }
-
-        slots[index].splice(position, 1);
-
-        return saveSlots(slots);
+        return removePlaylistItem(playlists[index].id, position);
     }
 
     function clearSlot(index) {
-        if (index < 0 || index >= SLOT_COUNT) {
+        var playlists = readPlaylists();
+
+        if (index < 0 || index >= playlists.length) {
             return false;
         }
 
-        var slots = readSlots();
-        slots[index] = [];
+        playlists[index].items = [];
 
-        return saveSlots(slots);
+        return savePlaylists(playlists);
     }
 
     function countLabel(count) {
@@ -1038,30 +1371,56 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
     }
 
-    // Step 2 of the actions menu: the slot rows. Renders into the container WITHOUT pushing a
-    // back handler and without seeding focus (both stay with the stack owner). The slot labels,
-    // the Id duplicate guard and the outcome texts are byte-faithful from the former
-    // openPlaylistPicker. reopenMenu (actions menu only) adds the Back-to-actions row that
-    // re-renders step 1 into the same container while the one menu entry stays on the stack.
+    // Step 2 of the actions menu: the dynamic playlist rows (name + live count) plus a
+    // New playlist row. Renders into the container WITHOUT pushing a back handler and without
+    // seeding focus (both stay with the stack owner). The Id duplicate guard and the outcome
+    // texts are preserved from the former slot picker. reopenMenu (actions menu only) adds the
+    // Back-to-actions row that re-renders step 1 into the same container while the one menu
+    // entry stays on the stack.
     function renderPlaylistSlotRows(pickerEl, statusEl, anchorEl, item, reopenMenu) {
         ui().clear(pickerEl);
 
-        var slots = listSlots();
+        var playlists = listPlaylists();
 
-        for (var i = 0; i < slots.length; i++) {
-            (function (index) {
+        for (var i = 0; i < playlists.length; i++) {
+            (function (pl) {
                 var pick = ui().el('button', 'playlist-pick-btn',
-                    slots[index].name + ' (' + countLabel(slots[index].count) + ')');
+                    pl.name + ' (' + countLabel(pl.count) + ')');
                 pick.type = 'button';
                 pick.onclick = function () {
-                    var result = addToSlot(index, item);
-                    showPickerStatus(statusEl, result, index);
+                    var result = addItemToPlaylist(pl.id, item);
+                    showPickerStatus(statusEl, result, pl.name);
                     closePlaylistPicker(pickerEl, anchorEl, true);
                     return false;
                 };
                 pickerEl.appendChild(pick);
-            })(i);
+            })(playlists[i]);
         }
+
+        // Create-and-add in one press: the new playlist gets the auto name, the item is added,
+        // and the outcome is reported exactly like a normal add before the menu closes.
+        var create = ui().el('button', 'playlist-pick-btn playlist-new-btn', 'New playlist');
+        create.type = 'button';
+        create.onclick = function () {
+            var id = createPlaylist(PL_DEFAULT_NAME);
+
+            if (id === false) {
+                showPickerStatus(statusEl, 'error', PL_DEFAULT_NAME);
+            } else {
+                var added = addItemToPlaylist(id, item);
+
+                if (added === 'error') {
+                    showPickerStatus(statusEl, 'error', PL_DEFAULT_NAME);
+                } else {
+                    statusEl.textContent = 'Created "' + PL_DEFAULT_NAME + '".';
+                    statusEl.style.display = '';
+                }
+            }
+
+            closePlaylistPicker(pickerEl, anchorEl, true);
+            return false;
+        };
+        pickerEl.appendChild(create);
 
         // Step-transition row: hands the container back to step 1 without a pop or a push.
         if (reopenMenu) {
@@ -1219,8 +1578,7 @@ var Michelly = window.Michelly = window.Michelly || {};
         });
     }
 
-    function showPickerStatus(statusEl, result, index) {
-        var name = SLOT_NAMES[index];
+    function showPickerStatus(statusEl, result, name) {
         var text;
 
         if (result === 'added') {
@@ -1250,11 +1608,13 @@ var Michelly = window.Michelly = window.Michelly || {};
     }
 
     // Entry from the library list: reset the stack (catalog discipline, exactly one handler that
-    // recreates Views) then show the freshly-rendered slot list.
+    // recreates Views) then show the freshly-rendered playlist list.
     function openPlaylists(userId) {
-        plSlotDetail = null;
-        plClearRow = null;
+        plDetailId = null;
+        plConfirmId = null;
+        plEditor = null;
         plStatusText = '';
+        plFocus = null;
 
         setBackHandler(function () {
             openViews(userId);
@@ -1264,7 +1624,10 @@ var Michelly = window.Michelly = window.Michelly || {};
     }
 
     // Content renderer + view switcher. Rebuilds on every call so counts are always current.
-    // Also used as the session's return target after a manage-play ends.
+    // Also used as the session's return target after a manage-play ends. It owns NO back-stack
+    // state: the editor and detail levels each push exactly ONE handler when they open (see
+    // below), and this renderer only reads the module state, so a re-render never changes the
+    // stack. That is what keeps every close path popping exactly one entry.
     function renderPlaylists(userId) {
         ensurePlaylistsView();
 
@@ -1273,21 +1636,89 @@ var Michelly = window.Michelly = window.Michelly || {};
         ui().showView('playlistsView');
         ui().clear(view);
 
+        var title = 'Playlists';
+        var editorOpen = plEditor !== null;
+        var detailId = plDetailId;
+
+        if (editorOpen) {
+            title = (plEditor.mode === 'rename') ? 'Rename playlist' : 'New playlist';
+        } else if (detailId !== null) {
+            var openName = null;
+            var playlists = listPlaylists();
+
+            for (var i = 0; i < playlists.length; i++) {
+                if (playlists[i].id === detailId) {
+                    openName = playlists[i].name;
+                    break;
+                }
+            }
+
+            if (openName === null) {
+                // The open playlist vanished (defensive: Delete lives one level up) — fall back.
+                plDetailId = null;
+                detailId = null;
+            } else {
+                title = openName;
+            }
+        }
+
         var header = ui().el('div', 'browse-header');
-        header.appendChild(ui().el('h1', 'playlist-title',
-            plSlotDetail === null ? 'Playlists' : SLOT_NAMES[plSlotDetail]));
+        header.appendChild(ui().el('h1', 'playlist-title', title));
         view.appendChild(header);
 
-        if (plSlotDetail === null) {
-            renderSlotList(view, userId);
+        if (editorOpen) {
+            renderPlaylistEditor(view, userId);
+        } else if (detailId === null) {
+            renderPlaylistList(view, userId);
         } else {
-            renderSlotDetail(view, userId, plSlotDetail);
+            renderPlaylistDetail(view, userId, detailId);
         }
 
         if (plStatusText) {
             var status = ui().el('p', 'playlist-status', plStatusText);
             status.style.display = '';
             view.appendChild(status);
+        }
+
+        // Focus seeding: while the editor is open its text input outranks the first button.
+        if (editorOpen) {
+            var input = view.querySelector('.playlist-name-input');
+
+            if (input) {
+                input.focus();
+                return;
+            }
+        }
+
+        // Reorder anchor (F1): a detail-row action recorded the row that must keep focus,
+        // so the D-pad stays on its Move up button instead of snapping to the top of the
+        // view. The anchor is consumed exactly once; a vanished position (Remove at the
+        // last index) clamps to the last surviving row.
+        if (plFocus !== null) {
+            var anchor = plFocus;
+
+            plFocus = null;
+
+            if (!editorOpen && detailId !== null && anchor.playlistId === detailId) {
+                var rows = view.querySelectorAll('.playlist-track-row');
+                var pos = anchor.position;
+
+                if (rows.length) {
+                    if (pos < 0) {
+                        pos = 0;
+                    }
+                    if (pos > rows.length - 1) {
+                        pos = rows.length - 1;
+                    }
+
+                    var target = rows[pos].querySelector('button');
+
+                    if (target) {
+                        target.focus();
+                        return;
+                    }
+                }
+            }
         }
 
         var first = view.querySelector('button');
@@ -1383,37 +1814,78 @@ var Michelly = window.Michelly = window.Michelly || {};
         }, 0);
     }
 
-    function renderSlotList(view, userId) {
-        var slots = listSlots();
+    // Start a manage-play session for one playlist. The queue is built from ENABLED items only
+    // (Disabled === true tracks are skipped); with nothing enabled the status line explains it
+    // and no session starts. The return target re-renders this view and arms the deferred mirror,
+    // exactly like the historical slot Play path.
+    function playPlaylist(userId, pl) {
+        var items = getPlaylistItems(pl.id);
+        var enabled = [];
+
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].Disabled !== true) {
+                enabled.push(items[i]);
+            }
+        }
+
+        if (!enabled.length) {
+            plStatusText = pl.name + ' has no enabled tracks.';
+            renderPlaylists(userId);
+            return;
+        }
+
+        // Start with a clean status line and no inline confirm: a mirrored failure from a
+        // previous session, or a confirm armed on another row, must not outlive the session
+        // into its teardown re-render.
+        plStatusText = '';
+        plConfirmId = null;
+
+        playlistStart(enabled, 0, userId, function () {
+            renderPlaylists(userId);
+            plManageReturnArmed = true;
+            mirrorManagePlayError(userId);
+        });
+    }
+
+    // Playlist list level: one row per playlist (name opens the detail; Play/Rename/Delete) plus
+    // a New playlist button. Delete arms an inline two-step Yes/No confirm in the same row. Every
+    // control is a real button; an empty playlist's Play is a focusable no-op.
+    function renderPlaylistList(view, userId) {
+        var playlists = listPlaylists();
         var body = ui().el('div', 'playlist-slots');
         view.appendChild(body);
 
-        for (var i = 0; i < slots.length; i++) {
-            (function (index) {
-                var count = slots[index].count;
+        if (!playlists.length) {
+            body.appendChild(ui().el('div', 'playlist-empty', 'No playlists yet.'));
+        }
+
+        for (var i = 0; i < playlists.length; i++) {
+            (function (pl) {
                 var row = ui().el('div', 'playlist-row');
 
-                var slot = ui().el('button', 'playlist-slot-btn',
-                    slots[index].name + ' (' + countLabel(count) + ')');
-                slot.type = 'button';
-                slot.onclick = function () {
-                    openSlotDetail(userId, index);
+                var nameBtn = ui().el('button', 'playlist-slot-btn',
+                    pl.name + ' (' + countLabel(pl.count) + ')');
+                nameBtn.type = 'button';
+                nameBtn.onclick = function () {
+                    openPlaylistDetail(userId, pl.id);
                     return false;
                 };
-                row.appendChild(slot);
+                row.appendChild(nameBtn);
 
-                if (plClearRow === index) {
-                    // Two-step inline confirm: the row swaps to a Yes/No prompt, nothing else changes.
+                if (plConfirmId === pl.id) {
+                    // Two-step inline confirm: the row swaps to a delete prompt, nothing else.
                     row.appendChild(ui().el('div', 'playlist-confirm-text',
-                        count === 1 ? 'Remove the track?' : 'Remove all ' + count + ' tracks?'));
+                        pl.count === 0 ? 'Delete this playlist?' :
+                            (pl.count === 1 ? 'Delete this playlist and its 1 track?' :
+                                'Delete this playlist and its ' + pl.count + ' tracks?')));
 
                     var yes = ui().el('button', 'playlist-confirm-btn', 'Yes');
                     yes.type = 'button';
                     yes.onclick = function () {
                         // A failed storage write is surfaced, never silent: the re-render below
-                        // re-reads the store, so the slot still shows its tracks on failure.
-                        plStatusText = clearSlot(index) ? '' : 'Could not save the playlist.';
-                        plClearRow = null;
+                        // re-reads the store, so the playlist is still there on failure.
+                        plStatusText = deletePlaylist(pl.id) ? '' : 'Could not save the playlist.';
+                        plConfirmId = null;
                         renderPlaylists(userId);
                         return false;
                     };
@@ -1422,79 +1894,73 @@ var Michelly = window.Michelly = window.Michelly || {};
                     var no = ui().el('button', 'playlist-confirm-btn', 'No');
                     no.type = 'button';
                     no.onclick = function () {
-                        plClearRow = null;
+                        plConfirmId = null;
                         renderPlaylists(userId);
                         return false;
                     };
                     row.appendChild(no);
                 } else {
-                    // Never-disabled: an empty slot still plays as a focusable button that no-ops.
+                    // Never-disabled: an all-disabled/empty playlist still plays as a focusable
+                    // button that explains itself on the status line.
                     var play = ui().el('button', 'playlist-play-btn', 'Play');
                     play.type = 'button';
                     play.onclick = function () {
-                        var items = getSlotItems(index);
-
-                        if (!items.length) {
-                            plStatusText = slots[index].name + ' is empty.';
-                            renderPlaylists(userId);
-                            return false;
-                        }
-
-                        // Start with a clean status line and no inline Clear confirm: a mirrored
-                        // failure from a previous session, or a confirm armed on another row,
-                        // must not outlive the session into its teardown re-render.
-                        plStatusText = '';
-                        plClearRow = null;
-
-                        playlistStart(items, 0, userId, function () {
-                            renderPlaylists(userId);
-                            plManageReturnArmed = true;
-                            mirrorManagePlayError(userId);
-                        });
+                        playPlaylist(userId, pl);
                         return false;
                     };
                     row.appendChild(play);
 
-                    var clear = ui().el('button', 'playlist-clear-btn', 'Clear');
-                    clear.type = 'button';
-                    clear.onclick = function () {
-                        if (!count) {
-                            plStatusText = slots[index].name + ' is empty.';
-                            renderPlaylists(userId);
-                            return false;
-                        }
+                    var rename = ui().el('button', 'playlist-rename-btn', 'Rename');
+                    rename.type = 'button';
+                    rename.onclick = function () {
+                        openPlaylistEditor(userId, 'rename', pl.id);
+                        return false;
+                    };
+                    row.appendChild(rename);
 
-                        plClearRow = index;
+                    var del = ui().el('button', 'playlist-delete-btn', 'Delete');
+                    del.type = 'button';
+                    del.onclick = function () {
+                        plConfirmId = pl.id;
                         plStatusText = '';
                         renderPlaylists(userId);
                         return false;
                     };
-                    row.appendChild(clear);
+                    row.appendChild(del);
                 }
 
                 body.appendChild(row);
-            })(i);
+            })(playlists[i]);
         }
+
+        var newBtn = ui().el('button', 'playlist-new-btn', 'New playlist');
+        newBtn.type = 'button';
+        newBtn.onclick = function () {
+            openPlaylistEditor(userId, 'create', null);
+            return false;
+        };
+        body.appendChild(newBtn);
     }
 
-    // Slot detail is a lower level inside the same view. It pushes one back handler so hardware
-    // Back exits to the slot list; the on-screen Back simply calls handleBack() (pops + invokes),
-    // exactly like the D-pad path.
-    function openSlotDetail(userId, index) {
-        plSlotDetail = index;
-        plClearRow = null;
+    // Playlist detail is a lower level inside the same view. It pushes ONE back handler so
+    // hardware Back exits to the playlist list; the on-screen Back simply calls handleBack()
+    // (pops + invokes), exactly like the D-pad path.
+    function openPlaylistDetail(userId, id) {
+        plDetailId = id;
+        plConfirmId = null;
         plStatusText = '';
+        plFocus = null;
 
         ui().pushBackHandler(function () {
-            plSlotDetail = null;
+            plDetailId = null;
             renderPlaylists(userId);
         });
 
         renderPlaylists(userId);
     }
 
-    function renderSlotDetail(view, userId, index) {
-        var items = getSlotItems(index);
+    function renderPlaylistDetail(view, userId, id) {
+        var items = getPlaylistItems(id);
         var body = ui().el('div', 'playlist-tracks');
         view.appendChild(body);
 
@@ -1504,17 +1970,84 @@ var Michelly = window.Michelly = window.Michelly || {};
 
         for (var j = 0; j < items.length; j++) {
             (function (position) {
-                var row = ui().el('div', 'playlist-track-row');
-                row.appendChild(ui().el('div', 'playlist-track-name', items[position].Name || 'Untitled'));
+                var item = items[position];
+                var disabled = item.Disabled === true;
+                var isFirst = position === 0;
+                var isLast = position === items.length - 1;
+                var row = ui().el('div', disabled ? 'playlist-track-row is-disabled' : 'playlist-track-row');
+
+                row.appendChild(ui().el('div', 'playlist-track-name', item.Name || 'Untitled'));
+
+                // Boundary rows dim (is-inert) but stay focusable no-ops, exactly like Prev/Next:
+                // a real <button>, never disabled, so the D-pad can never appear stuck.
+                var up = ui().el('button', 'playlist-move-btn' + (isFirst ? ' is-inert' : ''), 'Move up');
+                up.type = 'button';
+                up.onclick = function () {
+                    if (isFirst) {
+                        return false;
+                    }
+
+                    var moved = movePlaylistItem(id, position, position - 1);
+
+                    if (!moved) {
+                        plStatusText = 'Could not save the playlist.';
+                    }
+
+                    // Keep the D-pad on the moved row (F1); a failed write left the row in
+                    // place, so it stays anchored where it was.
+                    plFocus = { playlistId: id, position: moved ? position - 1 : position };
+                    renderPlaylists(userId);
+                    return false;
+                };
+                row.appendChild(up);
+
+                var down = ui().el('button', 'playlist-move-btn' + (isLast ? ' is-inert' : ''), 'Move down');
+                down.type = 'button';
+                down.onclick = function () {
+                    if (isLast) {
+                        return false;
+                    }
+
+                    var moved = movePlaylistItem(id, position, position + 1);
+
+                    if (!moved) {
+                        plStatusText = 'Could not save the playlist.';
+                    }
+
+                    plFocus = { playlistId: id, position: moved ? position + 1 : position };
+                    renderPlaylists(userId);
+                    return false;
+                };
+                row.appendChild(down);
+
+                // Soft-disable toggle: the label names the action, the dim classes name the state.
+                // Never disabled — a Dimmed Enable still re-enables the track.
+                var toggle = ui().el('button',
+                    'playlist-toggle-btn' + (disabled ? ' is-inert' : ''),
+                    disabled ? 'Enable' : 'Disable');
+                toggle.type = 'button';
+                toggle.onclick = function () {
+                    if (!setItemDisabled(id, position, !disabled)) {
+                        plStatusText = 'Could not save the playlist.';
+                    }
+
+                    plFocus = { playlistId: id, position: position };
+                    renderPlaylists(userId);
+                    return false;
+                };
+                row.appendChild(toggle);
 
                 var remove = ui().el('button', 'playlist-remove-btn', 'Remove');
                 remove.type = 'button';
                 remove.onclick = function () {
                     // Surface a failed storage write the same way Clear does (the re-render
                     // re-reads the store, so a failed remove leaves the track in place).
-                    if (!removeAt(index, position)) {
+                    if (!removePlaylistItem(id, position)) {
                         plStatusText = 'Could not save the playlist.';
                     }
+
+                    // The row may be gone; renderPlaylists() clamps to the last row (F1).
+                    plFocus = { playlistId: id, position: position };
                     renderPlaylists(userId);
                     return false;
                 };
@@ -1527,11 +2060,114 @@ var Michelly = window.Michelly = window.Michelly || {};
         var back = ui().el('button', 'playlist-back-btn', 'Back');
         back.type = 'button';
         back.onclick = function () {
-            // Pop the detail handler and run it (returns to the slot list), same as hardware Back.
+            // Pop the detail handler and run it (returns to the playlist list), same as hardware Back.
             ui().handleBack();
             return false;
         };
         view.appendChild(back);
+    }
+
+    // Inline create/rename editor, rendered INTO #playlistsView (no new view). Opening pushes
+    // exactly ONE back handler; renderPlaylists() only reads plEditor, so a re-render never
+    // re-pushes. Every close path pops exactly once: the pushed handler passes pop=false
+    // (handleBack already popped) while on-screen Save/Cancel pass pop=true.
+    function openPlaylistEditor(userId, mode, id) {
+        plEditor = { mode: mode, id: id || null, draft: null };
+        plConfirmId = null;
+        plStatusText = '';
+        plFocus = null;
+
+        ui().pushBackHandler(function () {
+            closePlaylistEditor(userId, false);
+        });
+
+        renderPlaylists(userId);
+    }
+
+    function closePlaylistEditor(userId, pop) {
+        if (pop) {
+            ui().popBackHandler();
+        }
+
+        plEditor = null;
+        plFocus = null;
+        renderPlaylists(userId);
+    }
+
+    function renderPlaylistEditor(view, userId) {
+        var initial = '';
+        var playlists = listPlaylists();
+
+        if (plEditor.mode === 'rename') {
+            for (var i = 0; i < playlists.length; i++) {
+                if (playlists[i].id === plEditor.id) {
+                    initial = playlists[i].name;
+                    break;
+                }
+            }
+        }
+
+        // A draft typed before a failed save (or a validation error) outranks the stored
+        // name, so the re-created input never discards the user's text (F5).
+        if (typeof plEditor.draft === 'string') {
+            initial = plEditor.draft;
+        }
+
+        var editor = ui().el('div', 'playlist-editor');
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'playlist-name-input';
+        input.value = initial;
+        editor.appendChild(input);
+
+        var save = ui().el('button', 'playlist-save-btn', 'Save');
+        save.type = 'button';
+        save.onclick = function () {
+            var name = input.value;
+            var ok;
+
+            // Stash the typed text before any re-render so a failed save keeps it (F5).
+            plEditor.draft = name;
+
+            if (plEditor.mode === 'rename') {
+                // A blank rename is a validation error, not a storage failure — keep the editor
+                // open and say so rather than surfacing the write-error text.
+                if (!(typeof name === 'string' && name.replace(/^\s+|\s+$/g, ''))) {
+                    plStatusText = 'Enter a playlist name.';
+                    renderPlaylists(userId);
+                    return false;
+                }
+
+                ok = renamePlaylist(plEditor.id, name);
+            } else {
+                ok = (createPlaylist(name) !== false);
+            }
+
+            if (!ok) {
+                // Write failure (quota/disabled storage): keep the editor open so the name is
+                // not lost, and surface the standard message.
+                plStatusText = 'Could not save the playlist.';
+                renderPlaylists(userId);
+                return false;
+            }
+
+            // Success: the draft dies with the editor (closePlaylistEditor nulls plEditor).
+            plEditor.draft = null;
+            closePlaylistEditor(userId, true);
+            return false;
+        };
+        editor.appendChild(save);
+
+        var cancel = ui().el('button', 'playlist-cancel-btn', 'Cancel');
+        cancel.type = 'button';
+        cancel.onclick = function () {
+            closePlaylistEditor(userId, true);
+            return false;
+        };
+        editor.appendChild(cancel);
+
+        view.appendChild(editor);
     }
 
     function openViews(userId) {
@@ -2326,11 +2962,23 @@ var Michelly = window.Michelly = window.Michelly || {};
     // Single/EP/album thresholds, kept in one place and overridable through musicSetConfig().
     var MUSIC_CONFIG = { epMaxTracks: 6, albumMinMs: 1800000 };
 
-    var MUSIC_CHIPS = ['All', 'A-F', 'G-M', 'N-T', 'U-Z', 'Folders'];
+    // Filter chips narrow the artist grid; the four dimension chips switch the content area to
+    // another browse surface. Only filter chips ever take the .is-active treatment.
+    var MUSIC_CHIPS = ['All', 'A-F', 'G-M', 'N-T', 'U-Z', 'Genres', 'Albums', 'Songs', 'Folders'];
+
+    function isFilterChip(label) {
+        return label === 'All' || label === 'A-F' || label === 'G-M' || label === 'N-T' || label === 'U-Z';
+    }
+
+    function isDimensionChip(label) {
+        return label === 'Genres' || label === 'Albums' || label === 'Songs';
+    }
 
     // Single-entry cache of the rendered music home (the lastGrouped pattern), so Back from an
     // artist or the grouped browse re-renders synchronously without refetching. Shape:
-    // {libraryId, userId, libraryName, artists, total, startIndex, chip, shelf}.
+    // {libraryId, userId, libraryName, artists, total, startIndex, chip, artistsRecursive,
+    //  shelves:[{key,title,items,loaded}], dimension:'artists'|'Albums'|'Songs'|'Genres'|'genre',
+    //  dimensionCache:{Albums|Songs|Genres:{loading,loaded,error,items,genres}}, genre, search}.
     var musicHome = null;
 
     // The artist detail currently rendered (only one artist view can be open at a time).
@@ -2338,6 +2986,12 @@ var Michelly = window.Michelly = window.Michelly || {};
 
     // One status line shared by the two music screens (only one is visible at a time).
     var musicStatusText = '';
+
+    // True while the genre drill-down's single back entry is on the stack (F3). Back pops
+    // it before invoking backToGenres(), which clears this flag; leaving the drill-down by
+    // any OTHER route (a chip or a new search) releases it explicitly so no stale entry
+    // survives.
+    var genreHandlerOpen = false;
 
     function isViewActive(id) {
         var view = document.querySelector('#' + id);
@@ -2453,8 +3107,8 @@ var Michelly = window.Michelly = window.Michelly || {};
         return rail;
     }
 
-    // Back is first in DOM order, so an Up press still reaches it; withSearch adds the static
-    // (non-tabbable) search surface, which is visual only in increment 1.
+    // Back is first in DOM order, so an Up press still reaches it; withSearch adds a real,
+    // tabbable search field plus its Search button (Workstream A3).
     function buildMusicTopbar(titleText, withSearch) {
         var topbar = ui().el('div', 'music-topbar');
 
@@ -2469,7 +3123,36 @@ var Michelly = window.Michelly = window.Michelly || {};
         topbar.appendChild(ui().el('div', 'music-title', titleText));
 
         if (withSearch) {
-            topbar.appendChild(ui().el('div', 'music-search', 'What do you want to play?'));
+            var input = ui().el('input', 'music-search-input');
+            input.id = 'musicSearchInput';
+            input.type = 'text';
+            input.placeholder = 'What do you want to play?';
+
+            if (musicHome && musicHome.search && musicHome.search.term) {
+                input.value = musicHome.search.term;
+            }
+
+            // Enter inside the field submits, mirroring the Search button (the global document
+            // key handler ignores keyCode 13, so the event reaches this handler).
+            input.onkeydown = function (evt) {
+                evt = evt || window.event;
+                if (evt.keyCode === 13) {
+                    runMusicSearch(input.value);
+                    if (evt.preventDefault) {
+                        evt.preventDefault();
+                    }
+                    return false;
+                }
+            };
+            topbar.appendChild(input);
+
+            var submit = ui().el('button', 'music-search-btn', 'Search');
+            submit.type = 'button';
+            submit.onclick = function () {
+                runMusicSearch(input.value);
+                return false;
+            };
+            topbar.appendChild(submit);
         }
 
         return topbar;
@@ -2493,6 +3176,7 @@ var Michelly = window.Michelly = window.Michelly || {};
     /* Music home ---------------------------------------------------------- */
 
     function openMusicHome(libraryId, userId, libraryName) {
+        genreHandlerOpen = false;
         musicHome = {
             libraryId: libraryId,
             userId: userId,
@@ -2501,15 +3185,20 @@ var Michelly = window.Michelly = window.Michelly || {};
             total: null,
             startIndex: 0,
             chip: 'All',
-            shelf: [],
-            artistsRecursive: false
+            artistsRecursive: false,
+            dimension: 'artists',
+            dimensionCache: {},
+            dimensionFailed: null,
+            genre: null,
+            search: null,
+            shelves: buildShelfDefs()
         };
         musicStatusText = '';
 
         showMusicHome();
 
         fetchMusicArtists(false, 0, false);
-        loadMusicShelf();
+        loadMusicShelves();
     }
 
     // Re-enters the music home with exactly one back handler (Back -> the library list) and a
@@ -2521,6 +3210,9 @@ var Michelly = window.Michelly = window.Michelly || {};
         }
 
         musicStatusText = '';
+
+        // setBackHandler() resets the whole stack, so any pushed genre entry is gone.
+        genreHandlerOpen = false;
 
         setBackHandler(function () {
             openViews(musicHome.userId);
@@ -2548,50 +3240,107 @@ var Michelly = window.Michelly = window.Michelly || {};
         var topbar = buildMusicTopbar(musicHome.libraryName || 'Music', true);
         main.appendChild(topbar);
 
+        var searching = !!(musicHome.search && musicHome.search.term);
+
+        // Search owns the content area, so the browse chips step aside while it is active.
+        if (!searching) {
+            main.appendChild(buildMusicChips());
+        }
+
+        var content = ui().el('div', 'music-content');
+        main.appendChild(content);
+
+        var showMore = null;
+
+        if (searching) {
+            renderMusicSearchResults(content);
+        } else if (musicHome.dimension && musicHome.dimension !== 'artists') {
+            renderMusicDimension(content);
+        } else {
+            showMore = renderMusicArtists(content);
+        }
+
+        var status = ui().el('div', 'music-status', musicStatusText || '');
+        status.style.display = musicStatusText ? '' : 'none';
+        content.appendChild(status);
+
+        if (focusPager && showMore) {
+            showMore.focus();
+        } else {
+            focusMusicScreen(content, topbar.querySelector('.music-back'));
+        }
+    }
+
+    function buildMusicChips() {
         var chips = ui().el('div', 'music-chips');
+        var artistMode = !musicHome.search && musicHome.dimension === 'artists';
 
         for (var c = 0; c < MUSIC_CHIPS.length; c++) {
             (function (label) {
-                var active = (label !== 'Folders') && (musicHome.chip === label);
+                var active = artistMode && isFilterChip(label) && musicHome.chip === label;
                 var chip = ui().el('button', 'music-chip' + (active ? ' is-active' : ''), label);
                 chip.type = 'button';
                 chip.onclick = function () {
-                    // Folders is a navigation action, not a filter: it opens the existing
-                    // folder-grouped browse, and Back returns to the music home.
-                    if (label === 'Folders') {
-                        openItems(musicHome.libraryId, musicHome.userId, {
-                            title: musicHome.libraryName,
-                            ParentId: musicHome.libraryId,
-                            grouped: true,
-                            back: function () {
-                                showMusicHome();
-                            }
-                        });
-                        return false;
-                    }
-
-                    musicHome.chip = label;
-                    musicStatusText = '';
-                    renderMusicHome(false);
+                    selectMusicChip(label);
                     return false;
                 };
                 chips.appendChild(chip);
             })(MUSIC_CHIPS[c]);
         }
 
-        main.appendChild(chips);
+        return chips;
+    }
 
-        var content = ui().el('div', 'music-content');
-        main.appendChild(content);
+    // Folders opens the existing folder-grouped browse; a dimension chip switches the content
+    // area to that dimension's grid; a filter chip restores the artist grid.
+    function selectMusicChip(label) {
+        if (!musicHome) {
+            return;
+        }
 
-        // The shelf band is only rendered when it has items (never an empty band).
-        if (musicHome.shelf && musicHome.shelf.length) {
-            content.appendChild(buildMusicShelf());
+        // Leaving the genre drill-down by any chip (Folders included) releases its single
+        // back entry first, so no stale handler survives the navigation (F3).
+        releaseGenreHandler();
+
+        if (label === 'Folders') {
+            openItems(musicHome.libraryId, musicHome.userId, {
+                title: musicHome.libraryName,
+                ParentId: musicHome.libraryId,
+                grouped: true,
+                back: function () {
+                    showMusicHome();
+                }
+            });
+            return;
+        }
+
+        musicStatusText = '';
+        musicHome.search = null;
+        musicHome.genre = null;
+
+        if (isDimensionChip(label)) {
+            musicHome.dimension = label;
+        } else {
+            musicHome.dimension = 'artists';
+            musicHome.chip = label;
+        }
+
+        // A failed dimension was dropped from the cache (F4); clear the transient failure
+        // marker so the next selection of that chip refetches instead of replaying the error.
+        musicHome.dimensionFailed = null;
+
+        renderMusicHome(false);
+    }
+
+    // The artist home: 0..3 shelves (each only when non-empty), the filtered artist grid, and
+    // the continuation pager. Returns the Show-more button when there is more to page.
+    function renderMusicArtists(content) {
+        if (hasShelfItems(musicHome.shelves)) {
+            content.appendChild(buildMusicShelves());
         }
 
         content.appendChild(buildArtistGrid());
 
-        // Continuation: only when the server reports more artists than are loaded.
         var showMore = null;
 
         if (typeof musicHome.total === 'number' && musicHome.artists.length < musicHome.total) {
@@ -2615,15 +3364,7 @@ var Michelly = window.Michelly = window.Michelly || {};
             content.appendChild(pager);
         }
 
-        var status = ui().el('div', 'music-status', musicStatusText || '');
-        status.style.display = musicStatusText ? '' : 'none';
-        content.appendChild(status);
-
-        if (focusPager && showMore) {
-            showMore.focus();
-        } else {
-            focusMusicScreen(content, topbar.querySelector('.music-back'));
-        }
+        return showMore;
     }
 
     // One page of artists (Limit 100). An empty first page retries once against the
@@ -2667,7 +3408,11 @@ var Michelly = window.Michelly = window.Michelly || {};
             home.startIndex = startIndex + items.length;
             home.total = (data && typeof data.TotalRecordCount === 'number') ? data.TotalRecordCount : home.startIndex;
 
-            if (isViewActive('musicView')) {
+            // A late artist page must not repaint (and re-seed focus to the first card) while a
+            // dimension grid or an active search owns the content area; the cache above is
+            // already updated, so the appended artists stay available for later. Mirrors the
+            // error path's guard (F2).
+            if (isViewActive('musicView') && !home.search && home.dimension === 'artists') {
                 renderMusicHome(isMore);
             }
         }, function (err) {
@@ -2680,9 +3425,22 @@ var Michelly = window.Michelly = window.Michelly || {};
             }
 
             if (isMore) {
-                // Keep the already-rendered grid; surface the failure inline instead.
-                musicStatusText = 'Could not load more artists.';
-                renderMusicHome(true);
+                // A late 'Show more' failure must not repaint (and re-seed focus to the
+                // first card) once a dimension chip or a search owns the content area; the
+                // failure is moot there. Mirrors the success path's guard (F2).
+                if (!home.search && home.dimension === 'artists') {
+                    // Keep the already-rendered grid; surface the failure inline instead.
+                    musicStatusText = 'Could not load more artists.';
+                    renderMusicHome(true);
+                }
+                return;
+            }
+
+            // A dimension grid or an active search owns the content area now; surface the
+            // failure on the status line instead of wiping that view with a full error state.
+            if (musicHome.dimension !== 'artists' || musicHome.search) {
+                musicStatusText = 'Could not load artists.';
+                renderMusicHome(false);
                 return;
             }
 
@@ -2783,85 +3541,712 @@ var Michelly = window.Michelly = window.Michelly || {};
         return button;
     }
 
-    // "Jump back in" shelf: reuses the Resume endpoint, keeps the playable music entries (max
-    // 8), and stays hidden entirely when the list is empty or the call fails.
-    function loadMusicShelf() {
+    /* Browse dimensions (Albums / Songs / Genres). Fetched lazily the first time a chip is
+     * selected and cached on musicHome.dimensionCache, then re-rendered in place. */
+
+    function ensureMusicDimension(key) {
+        var home = musicHome;
+
+        if (!home) {
+            return null;
+        }
+
+        if (!home.dimensionCache) {
+            home.dimensionCache = {};
+        }
+
+        var entry = home.dimensionCache[key];
+
+        if (entry) {
+            return entry;
+        }
+
+        entry = { key: key, loading: true, loaded: false, error: false, items: [], genres: null };
+        home.dimensionCache[key] = entry;
+
+        function onSuccess(data) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            entry.items = (data && data.Items) ? data.Items : [];
+
+            if (key === 'Genres') {
+                entry.genres = collectGenres(entry.items);
+            }
+
+            entry.loading = false;
+            entry.loaded = true;
+
+            // A successful reload clears any lingering failure marker for this key (F4).
+            if (home.dimensionFailed === key) {
+                home.dimensionFailed = null;
+            }
+
+            if (isViewActive('musicView')) {
+                renderMusicHome(false);
+            }
+        }
+
+        function onFailure() {
+            if (musicHome !== home) {
+                return;
+            }
+
+            entry.loading = false;
+            entry.error = true;
+
+            // Drop the failed dimension from the cache so the next chip selection (or the
+            // Retry button) refetches instead of replaying the cached error (F4). The visible
+            // error is carried by home.dimensionFailed until then, which also stops this
+            // failure re-render from immediately retrying in a loop.
+            if (home.dimensionCache) {
+                home.dimensionCache[key] = null;
+            }
+            home.dimensionFailed = key;
+
+            if (isViewActive('musicView')) {
+                renderMusicHome(false);
+            }
+        }
+
+        // Dimensions are windowed (no pager yet): 500 items is the first-paint budget for
+        // this pass; a continuation/pager is a deliberate follow-up (F6).
+        if (key === 'Genres') {
+            // /Items has no Genres query param, so the genres are derived client-side from the
+            // fetched audio items' own Genres arrays (see collectGenres below).
+            api().getItems({
+                ParentId: home.libraryId,
+                Recursive: true,
+                IncludeItemTypes: 'Audio',
+                SortBy: 'SortName',
+                SortOrder: 'Ascending',
+                Fields: 'Genres,PrimaryImageAspectRatio',
+                Limit: 500
+            }, onSuccess, onFailure);
+        } else {
+            api().getItems({
+                ParentId: home.libraryId,
+                Recursive: true,
+                IncludeItemTypes: key === 'Albums' ? 'MusicAlbum' : 'Audio',
+                SortBy: 'SortName',
+                SortOrder: 'Ascending',
+                Fields: 'PrimaryImageAspectRatio',
+                Limit: 500
+            }, onSuccess, onFailure);
+        }
+
+        return entry;
+    }
+
+    // Unique, sorted genre names across the audio items' Genres arrays.
+    function collectGenres(items) {
+        var seen = {};
+        var out = [];
+        var i, j, names, name;
+
+        for (i = 0; i < items.length; i++) {
+            names = items[i] && items[i].Genres;
+
+            if (!names || !names.length) {
+                continue;
+            }
+
+            for (j = 0; j < names.length; j++) {
+                name = String(names[j] || '');
+
+                if (name && !seen.hasOwnProperty(name)) {
+                    seen[name] = true;
+                    out.push(name);
+                }
+            }
+        }
+
+        out.sort(function (a, b) {
+            return a < b ? -1 : (a > b ? 1 : 0);
+        });
+
+        return out;
+    }
+
+    function renderMusicDimension(content) {
+        var key = musicHome.dimension;
+        var label;
+
+        if (key === 'genre') {
+            renderMusicGenreSongs(content);
+            return;
+        }
+
+        // A failed dimension was dropped from the cache (F4) and is remembered on the home
+        // until the user reselects the chip or presses Retry. Check it BEFORE
+        // ensureMusicDimension so the failure re-render does not immediately refetch in a
+        // loop; the error line stays visible meanwhile.
+        if (musicHome.dimensionFailed === key) {
+            label = (key === 'Albums' ? 'albums' : (key === 'Songs' ? 'songs' : 'genres'));
+            musicStatusText = 'Could not load ' + label + '.';
+            content.appendChild(ui().el('div', 'music-empty', 'Could not load this view.'));
+
+            // Focusable retry (never disabled): clears the failure and re-renders, which
+            // lets ensureMusicDimension load again.
+            var retry = ui().el('button', 'music-retry-btn', 'Retry');
+            retry.type = 'button';
+            retry.onclick = function () {
+                if (musicHome && musicHome.dimensionFailed === key) {
+                    musicHome.dimensionFailed = null;
+
+                    if (musicHome.dimensionCache) {
+                        musicHome.dimensionCache[key] = null;
+                    }
+
+                    musicStatusText = '';
+                    renderMusicHome(false);
+                }
+                return false;
+            };
+            content.appendChild(retry);
+            return;
+        }
+
+        var entry = ensureMusicDimension(key);
+
+        if (!entry || (!entry.loaded && !entry.error)) {
+            content.appendChild(ui().el('div', 'music-empty', 'Loading...'));
+            return;
+        }
+
+        if (entry.error) {
+            // Never a blank screen: keep the chips and surface the failure on the status line.
+            musicStatusText = 'Could not load ' +
+                (key === 'Albums' ? 'albums' : (key === 'Songs' ? 'songs' : 'genres')) + '.';
+            content.appendChild(ui().el('div', 'music-empty', 'Could not load this view.'));
+            return;
+        }
+
+        if (key === 'Genres') {
+            renderGenreGrid(content, entry);
+            return;
+        }
+
+        var items = entry.items || [];
+        var emptyMsg = key === 'Albums' ? 'No albums found.' : 'No songs found.';
+
+        if (!items.length) {
+            content.appendChild(ui().el('div', 'music-empty', emptyMsg));
+            return;
+        }
+
+        var grid = ui().el('div', 'card-list music-grid');
+
+        for (var i = 0; i < items.length; i++) {
+            grid.appendChild(makeCard(items[i], key === 'Albums' ? openDimensionAlbum : openDimensionSong));
+        }
+
+        content.appendChild(grid);
+    }
+
+    function openDimensionAlbum(item) {
+        if (!musicHome) {
+            return;
+        }
+
+        openItems(item.Id, musicHome.userId, {
+            title: item.Name,
+            ParentId: item.Id,
+            Recursive: false,
+            IncludeItemTypes: 'Audio',
+            Fields: 'PrimaryImageAspectRatio',
+            back: function () {
+                showMusicHome();
+            }
+        });
+    }
+
+    function openDimensionSong(item) {
+        var entry = musicHome && musicHome.dimensionCache ? musicHome.dimensionCache.Songs : null;
+
+        if (!entry) {
+            return;
+        }
+
+        startAudioSession(entry.items, item.Id);
+    }
+
+    function renderGenreGrid(content, entry) {
+        var genres = entry.genres || [];
+
+        if (!genres.length) {
+            content.appendChild(ui().el('div', 'music-empty', 'No genres found.'));
+            return;
+        }
+
+        var grid = ui().el('div', 'music-genre-grid');
+
+        for (var i = 0; i < genres.length; i++) {
+            (function (name) {
+                var button = ui().el('button', 'music-genre-btn', name);
+                button.type = 'button';
+                button.onclick = function () {
+                    openGenre(name);
+                    return false;
+                };
+                grid.appendChild(button);
+            })(genres[i]);
+        }
+
+        content.appendChild(grid);
+    }
+
+    // Releases the genre drill-down's single back entry when the user leaves it by a route
+    // other than Back (a chip or a new search), so no stale handler survives (F3).
+    function releaseGenreHandler() {
+        if (genreHandlerOpen) {
+            genreHandlerOpen = false;
+            ui().popBackHandler();
+        }
+    }
+
+    function openGenre(name) {
+        if (!musicHome) {
+            return;
+        }
+
+        musicHome.dimension = 'genre';
+        musicHome.genre = name;
+        musicStatusText = '';
+
+        // One back entry for the drill-down (F3): hardware Back returns to the genre grid.
+        // handleBack() pops before invoking, so backToGenres() must not pop; the on-screen
+        // affordance routes through handleBack() too. The flag keeps exactly one entry even
+        // if openGenre were ever re-entered.
+        if (!genreHandlerOpen) {
+            genreHandlerOpen = true;
+            ui().pushBackHandler(function () {
+                backToGenres();
+            });
+        }
+
+        renderMusicHome(false);
+    }
+
+    function backToGenres() {
+        if (!musicHome) {
+            return;
+        }
+
+        // The handler was already popped by handleBack(); just clear the flag and render.
+        genreHandlerOpen = false;
+        musicHome.dimension = 'Genres';
+        musicHome.genre = null;
+        musicStatusText = '';
+        renderMusicHome(false);
+    }
+
+    function filterSongsByGenre(items, genre) {
+        var out = [];
+
+        for (var i = 0; items && i < items.length; i++) {
+            if (items[i] && items[i].Genres && items[i].Genres.indexOf(genre) >= 0) {
+                out.push(items[i]);
+            }
+        }
+
+        return out;
+    }
+
+    // Genre drill-down: songs filtered client-side from the already-fetched audio items, shown
+    // as cards under a small header with a Back-to-genres affordance; a tap starts an audio-only
+    // session over the filtered list.
+    function renderMusicGenreSongs(content) {
+        var entry = musicHome.dimensionCache ? musicHome.dimensionCache.Genres : null;
+
+        var head = ui().el('div', 'music-results-head');
+        head.appendChild(ui().el('h2', 'music-results-title', 'Genre: ' + (musicHome.genre || '')));
+
+        var back = ui().el('button', 'music-genre-back-btn', 'Back to genres');
+        back.type = 'button';
+        back.onclick = function () {
+            // Pop the drill-down's single entry and invoke backToGenres() when this screen
+            // owns one; otherwise (e.g. the entry was already released by another route)
+            // render the genre grid directly, so this button never pops a handler it does
+            // not own (F3).
+            if (genreHandlerOpen) {
+                ui().handleBack();
+            } else {
+                backToGenres();
+            }
+            return false;
+        };
+        head.appendChild(back);
+        content.appendChild(head);
+
+        if (!entry || !entry.loaded) {
+            content.appendChild(ui().el('div', 'music-empty', 'Loading...'));
+            return;
+        }
+
+        var songs = filterSongsByGenre(entry.items, musicHome.genre);
+
+        if (!songs.length) {
+            content.appendChild(ui().el('div', 'music-empty', 'No songs found.'));
+            return;
+        }
+
+        var grid = ui().el('div', 'card-list music-grid');
+
+        for (var i = 0; i < songs.length; i++) {
+            (function (song, list) {
+                grid.appendChild(makeCard(song, function () {
+                    startAudioSession(list, song.Id);
+                }));
+            })(songs[i], songs);
+        }
+
+        content.appendChild(grid);
+    }
+
+    /* Functional search (Workstream A3): the topbar field is real now. A term is sent to /Items
+     * as SearchTerm and the results replace the whole content area until cleared. */
+
+    function runMusicSearch(rawTerm) {
+        if (!musicHome) {
+            return;
+        }
+
+        var term = String(rawTerm || '').replace(/^\s+|\s+$/g, '');
+
+        // Blank/whitespace term is a no-op.
+        if (!term) {
+            return;
+        }
+
+        // A search replaces the content area, so leaving the genre drill-down releases its
+        // single back entry first (F3).
+        releaseGenreHandler();
+
+        musicHome.search = { term: term, loading: true, loaded: false, error: false, items: [] };
+
+        // A search replaces the content area, so it also resets the browse dimension: a
+        // cleared search must never fall back into a stale genre drill-down (an empty
+        // 'Genre: ' screen whose Back affordance would pop the base handler and exit
+        // Music). Clear search always returns to the normal artist grid.
+        musicHome.dimension = 'artists';
+        musicHome.genre = null;
+        musicStatusText = '';
+
+        renderMusicHome(false);
+
+        var home = musicHome;
+
+        api().getItems({
+            ParentId: home.libraryId,
+            Recursive: true,
+            IncludeItemTypes: 'Audio,MusicAlbum,MusicArtist',
+            SearchTerm: term,
+            SortBy: 'SortName',
+            SortOrder: 'Ascending',
+            Fields: 'PrimaryImageAspectRatio',
+            Limit: 100
+        }, function (data) {
+            if (musicHome !== home || !home.search || home.search.term !== term) {
+                return;
+            }
+
+            home.search.items = (data && data.Items) ? data.Items : [];
+            home.search.loading = false;
+            home.search.loaded = true;
+
+            if (isViewActive('musicView')) {
+                renderMusicHome(false);
+            }
+        }, function () {
+            if (musicHome !== home || !home.search || home.search.term !== term) {
+                return;
+            }
+
+            home.search.loading = false;
+            home.search.error = true;
+
+            if (isViewActive('musicView')) {
+                renderMusicHome(false);
+            }
+        });
+    }
+
+    function clearMusicSearch() {
+        if (!musicHome) {
+            return;
+        }
+
+        musicHome.search = null;
+
+        // Belt-and-braces with runMusicSearch: clearing a search always returns to the
+        // normal artist grid, never a stale genre drill-down whose Back affordance would
+        // pop the base handler and exit Music.
+        musicHome.dimension = 'artists';
+        musicHome.genre = null;
+        musicStatusText = '';
+        renderMusicHome(false);
+    }
+
+    function renderMusicSearchResults(content) {
+        var search = musicHome.search;
+
+        var head = ui().el('div', 'music-results-head');
+        head.appendChild(ui().el('h2', 'music-results-title', 'Results for "' + search.term + '"'));
+
+        var clear = ui().el('button', 'music-clear-btn', 'Clear search');
+        clear.type = 'button';
+        clear.onclick = function () {
+            clearMusicSearch();
+            return false;
+        };
+        head.appendChild(clear);
+        content.appendChild(head);
+
+        if (search.loading) {
+            content.appendChild(ui().el('div', 'music-empty', 'Loading...'));
+            return;
+        }
+
+        if (search.error) {
+            // ui().showError clears the box it is given, so it goes into its own sub-container
+            // to keep the header and Clear search reachable above the error.
+            var errBox = ui().el('div', 'music-results-error');
+            content.appendChild(errBox);
+            ui().showError(errBox, null, 'Could not run the search.');
+            return;
+        }
+
+        if (!search.items.length) {
+            content.appendChild(ui().el('div', 'music-empty', 'No results.'));
+            return;
+        }
+
+        var grid = ui().el('div', 'card-list music-grid');
+
+        for (var i = 0; i < search.items.length; i++) {
+            grid.appendChild(makeCard(search.items[i], openMusicSearchResult));
+        }
+
+        content.appendChild(grid);
+    }
+
+    // Audio -> an audio-only session over the audio results; MusicAlbum -> its tracks; a
+    // MusicArtist -> the artist view.
+    function openMusicSearchResult(item) {
+        if (!musicHome || !musicHome.search) {
+            return;
+        }
+
+        if (item.Type === 'MusicArtist') {
+            openArtist(item, musicHome.userId);
+            return;
+        }
+
+        if (item.Type !== 'Audio') {
+            openItems(item.Id, musicHome.userId, {
+                title: item.Name,
+                ParentId: item.Id,
+                Recursive: false,
+                IncludeItemTypes: 'Audio',
+                Fields: 'PrimaryImageAspectRatio',
+                back: function () {
+                    showMusicHome();
+                }
+            });
+            return;
+        }
+
+        startAudioSession(musicHome.search.items, item.Id);
+    }
+
+    /* Shelves: "Jump back in" (Resume), "Recently added" (DateCreated) and "Most played"
+     * (PlayCount). Each renders only when non-empty; a failure hides only its own band. */
+
+    function buildShelfDefs() {
+        return [
+            { key: 'jump', title: 'Jump back in', items: [], loaded: false },
+            { key: 'recent', title: 'Recently added', items: [], loaded: false },
+            { key: 'played', title: 'Most played', items: [], loaded: false }
+        ];
+    }
+
+    function hasShelfItems(shelves) {
+        for (var i = 0; shelves && i < shelves.length; i++) {
+            if (shelves[i].items && shelves[i].items.length) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function setShelfItems(home, key, items) {
+        for (var i = 0; i < home.shelves.length; i++) {
+            if (home.shelves[i].key === key) {
+                home.shelves[i].items = items || [];
+                home.shelves[i].loaded = true;
+                break;
+            }
+        }
+
+        // Only the artist home carries shelves; a late response must never disturb a dimension
+        // grid or an active search.
+        if (isViewActive('musicView') && !home.search && home.dimension === 'artists') {
+            insertMusicShelves();
+        }
+    }
+
+    function loadMusicShelves() {
         var home = musicHome;
 
         if (!home) {
             return;
         }
 
+        // "Jump back in" keeps the Resume endpoint and the playable music entries (max 8).
         api().getResume(home.userId, function (data) {
             if (musicHome !== home) {
                 return;
             }
 
             var raw = (data && data.Items) ? data.Items : [];
-            var shelf = [];
+            var items = [];
 
-            for (var i = 0; i < raw.length && shelf.length < 8; i++) {
+            for (var i = 0; i < raw.length && items.length < 8; i++) {
                 if (raw[i] && (raw[i].Type === 'Audio' || raw[i].Type === 'MusicAlbum')) {
-                    shelf.push(raw[i]);
+                    items.push(raw[i]);
                 }
             }
 
-            home.shelf = shelf;
-
-            if (shelf.length && isViewActive('musicView')) {
-                insertMusicShelf();
-            }
+            setShelfItems(home, 'jump', items);
         }, function () {
             if (musicHome !== home) {
                 return;
             }
 
-            home.shelf = [];
+            setShelfItems(home, 'jump', []);
+        });
+
+        api().getItems({
+            ParentId: home.libraryId,
+            Recursive: true,
+            IncludeItemTypes: 'MusicAlbum,Audio',
+            SortBy: 'DateCreated',
+            SortOrder: 'Descending',
+            Fields: 'PrimaryImageAspectRatio',
+            Limit: 8
+        }, function (data) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            setShelfItems(home, 'recent', (data && data.Items) ? data.Items : []);
+        }, function () {
+            if (musicHome !== home) {
+                return;
+            }
+
+            setShelfItems(home, 'recent', []);
+        });
+
+        api().getItems({
+            ParentId: home.libraryId,
+            Recursive: true,
+            IncludeItemTypes: 'MusicAlbum,Audio',
+            SortBy: 'PlayCount',
+            SortOrder: 'Descending',
+            Filters: 'IsPlayed',
+            Fields: 'PrimaryImageAspectRatio',
+            Limit: 8
+        }, function (data) {
+            if (musicHome !== home) {
+                return;
+            }
+
+            setShelfItems(home, 'played', (data && data.Items) ? data.Items : []);
+        }, function () {
+            if (musicHome !== home) {
+                return;
+            }
+
+            setShelfItems(home, 'played', []);
         });
     }
 
-    // Inserts or replaces the shelf in place, before the artist grid, so a late Resume response
-    // does not steal D-pad focus through a full re-render.
-    function insertMusicShelf() {
+    // Rebuilds the whole shelf region in place (before the artist grid) so a late shelf
+    // response never triggers a full re-render that would steal D-pad focus.
+    function insertMusicShelves() {
         var content = document.querySelector('#musicView .music-content');
         var grid = content ? content.querySelector('.music-grid') : null;
 
-        if (!content || !grid) {
+        if (!content || !grid || !musicHome) {
             return;
         }
 
-        var existing = content.querySelector('.music-shelf');
+        var existing = content.querySelector('.music-shelves');
+        var hadFocus = !!(existing && document.activeElement && existing.contains &&
+            existing.contains(document.activeElement));
 
         if (existing) {
             content.removeChild(existing);
         }
 
-        if (musicHome && musicHome.shelf && musicHome.shelf.length) {
-            content.insertBefore(buildMusicShelf(), grid);
+        if (!hasShelfItems(musicHome.shelves)) {
+            return;
+        }
+
+        var wrap = buildMusicShelves();
+        content.insertBefore(wrap, grid);
+
+        if (hadFocus) {
+            var card = wrap.querySelector('.card');
+
+            if (card) {
+                card.focus();
+            }
         }
     }
 
-    function buildMusicShelf() {
-        var shelf = ui().el('div', 'music-shelf');
+    function buildMusicShelves() {
+        var wrap = ui().el('div', 'music-shelves');
+
+        for (var i = 0; i < musicHome.shelves.length; i++) {
+            if (musicHome.shelves[i].items && musicHome.shelves[i].items.length) {
+                wrap.appendChild(buildMusicShelf(musicHome.shelves[i]));
+            }
+        }
+
+        return wrap;
+    }
+
+    function buildMusicShelf(shelf) {
+        var shelfEl = ui().el('div', 'music-shelf');
 
         var head = ui().el('div', 'folder-section-head');
-        head.appendChild(ui().el('h2', 'folder-section-title', 'Jump back in'));
-        shelf.appendChild(head);
+        head.appendChild(ui().el('h2', 'folder-section-title', shelf.title));
+        shelfEl.appendChild(head);
 
         var list = ui().el('div', 'card-list');
 
-        for (var i = 0; i < musicHome.shelf.length; i++) {
-            list.appendChild(makeCard(musicHome.shelf[i], playShelfItem));
+        for (var i = 0; i < shelf.items.length; i++) {
+            (function (shelfRef, item) {
+                list.appendChild(makeCard(item, function () {
+                    playShelfItem(item, shelfRef);
+                }));
+            })(shelf, shelf.items[i]);
         }
 
-        shelf.appendChild(list);
+        shelfEl.appendChild(list);
 
-        return shelf;
+        return shelfEl;
     }
 
-    // Audio items join an audio-only ordered session. A MusicAlbum would be misrouted by the
-    // session to the video player, so it opens its album through the generic items view instead.
-    function playShelfItem(item) {
+    // Audio items join their shelf's audio-only ordered session. A MusicAlbum would be
+    // misrouted by the session to the video player, so it opens its album through the generic
+    // items view instead.
+    function playShelfItem(item, shelf) {
         if (!musicHome) {
             return;
         }
@@ -2880,20 +4265,27 @@ var Michelly = window.Michelly = window.Michelly || {};
             return;
         }
 
+        startAudioSession(shelf.items, item.Id);
+    }
+
+    // One shared audio-session starter for every music surface: build an Audio-only queue from
+    // the supplied items, find the tapped track, and play it as an ordered session whose end
+    // returns to the music home and mirrors a playback failure onto the status line.
+    function startAudioSession(items, itemId) {
+        if (!musicHome) {
+            return;
+        }
+
         var queue = [];
         var index = -1;
         var i;
 
-        for (i = 0; i < musicHome.shelf.length; i++) {
-            if (musicHome.shelf[i].Type === 'Audio') {
-                queue.push(musicHome.shelf[i]);
-            }
-        }
-
-        for (i = 0; i < queue.length; i++) {
-            if (queue[i].Id === item.Id) {
-                index = i;
-                break;
+        for (i = 0; items && i < items.length; i++) {
+            if (items[i] && items[i].Type === 'Audio') {
+                if (items[i].Id === itemId) {
+                    index = queue.length;
+                }
+                queue.push(items[i]);
             }
         }
 
@@ -3338,10 +4730,24 @@ var Michelly = window.Michelly = window.Michelly || {};
         clearQueue: playlistClearQueue
     };
 
-    // User-built playlist slots (plural). The session API above is untouched; this is the
-    // storage surface only (keying + list/read/add/remove/clear), backed by localStorage.
+    // User-built playlists (plural). The session API above is untouched; this is the dynamic
+    // storage surface (keying + list/read/create/rename/delete/reorder/disable/add/remove),
+    // backed by localStorage, plus the legacy index-based aliases over the same model.
     namespace.playlists = {
         setServerId: setServerId,
+
+        // Dynamic named playlists (Tier 3).
+        listPlaylists: listPlaylists,
+        getPlaylistItems: getPlaylistItems,
+        createPlaylist: createPlaylist,
+        renamePlaylist: renamePlaylist,
+        deletePlaylist: deletePlaylist,
+        movePlaylistItem: movePlaylistItem,
+        setItemDisabled: setItemDisabled,
+        addItemToPlaylist: addItemToPlaylist,
+        removePlaylistItem: removePlaylistItem,
+
+        // Legacy index-based aliases (kept for documented behavior contracts).
         listSlots: listSlots,
         getSlotItems: getSlotItems,
         addToSlot: addToSlot,
